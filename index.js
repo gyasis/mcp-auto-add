@@ -46,6 +46,9 @@ EXAMPLES:
     # Using JSON input directly
     mcp-auto-add --json '{"command":"npx","args":["-y","gemini-mcp-tool"]}'
     
+    # Using wrapped JSON format (copied from Claude settings)
+    mcp-auto-add --json '{"gitmcp":{"url":"https://gitmcp.io/docs"}}'
+    
     # Using JSON from file
     mcp-auto-add --json-file ./mcp-config.json
     
@@ -267,6 +270,21 @@ function parseJSONConfig(jsonStr, serverName = null) {
     try {
         const parsed = JSON.parse(jsonStr);
         
+        // Check if this is a wrapped format like {"server-name": { config }}
+        const keys = Object.keys(parsed);
+        if (keys.length === 1 && !parsed.command && !parsed.url && typeof parsed[keys[0]] === 'object') {
+            // This looks like a wrapper format
+            const extractedServerName = keys[0];
+            const innerConfig = parsed[extractedServerName];
+            
+            log(`📦 Detected wrapped JSON format with server name: "${extractedServerName}"`, 'info');
+            
+            // Recursively parse the inner configuration
+            const config = parseJSONConfig(JSON.stringify(innerConfig), extractedServerName);
+            config.extractedServerName = extractedServerName;
+            return config;
+        }
+        
         // Handle URL-based configuration (like gitmcp)
         if (parsed.url) {
             log('📌 Detected URL-based MCP configuration', 'info');
@@ -317,28 +335,92 @@ function readJSONFromFile(filePath) {
 
 // Function to prompt for JSON input interactively
 async function promptForJSONInput() {
-    console.log(chalk.cyan('\n📋 You can paste multi-line JSON. Press Enter twice when done.\n'));
-    
-    const { jsonConfig } = await inquirer.prompt([
+    const { inputMethod } = await inquirer.prompt([
         {
-            type: 'editor',
-            name: 'jsonConfig',
-            message: 'Paste or type your MCP JSON configuration:',
-            validate: (input) => {
-                if (!input || input.trim().length === 0) {
-                    return 'JSON configuration cannot be empty';
-                }
-                try {
-                    JSON.parse(input);
-                    return true;
-                } catch (error) {
-                    return `Invalid JSON: ${error.message}`;
-                }
-            }
+            type: 'list',
+            name: 'inputMethod',
+            message: 'How would you like to input the JSON?',
+            choices: [
+                { name: 'Type/paste in terminal (single or multi-line)', value: 'input' },
+                { name: 'Open nano editor', value: 'nano' },
+                { name: 'Open default editor', value: 'editor' }
+            ],
+            default: 'input'
         }
     ]);
     
-    return jsonConfig;
+    if (inputMethod === 'input') {
+        console.log(chalk.cyan('\n📋 Paste your JSON configuration below. Press Enter when done:\n'));
+        
+        const { jsonConfig } = await inquirer.prompt([
+            {
+                type: 'input',
+                name: 'jsonConfig',
+                message: 'JSON:',
+                validate: (input) => {
+                    if (!input || input.trim().length === 0) {
+                        return 'JSON configuration cannot be empty';
+                    }
+                    try {
+                        JSON.parse(input);
+                        return true;
+                    } catch (error) {
+                        return `Invalid JSON: ${error.message}`;
+                    }
+                }
+            }
+        ]);
+        
+        return jsonConfig;
+    } else if (inputMethod === 'nano') {
+        const { jsonConfig } = await inquirer.prompt([
+            {
+                type: 'editor',
+                name: 'jsonConfig',
+                message: 'JSON configuration (will open nano):',
+                default: '{\n  "command": "",\n  "args": [],\n  "env": {}\n}',
+                validate: (input) => {
+                    if (!input || input.trim().length === 0) {
+                        return 'JSON configuration cannot be empty';
+                    }
+                    try {
+                        JSON.parse(input);
+                        return true;
+                    } catch (error) {
+                        return `Invalid JSON: ${error.message}`;
+                    }
+                },
+                waitUserInput: false,
+                env: {
+                    EDITOR: 'nano'
+                }
+            }
+        ]);
+        
+        return jsonConfig;
+    } else {
+        const { jsonConfig } = await inquirer.prompt([
+            {
+                type: 'editor',
+                name: 'jsonConfig',
+                message: 'JSON configuration (will open default editor):',
+                default: '{\n  "command": "",\n  "args": [],\n  "env": {}\n}',
+                validate: (input) => {
+                    if (!input || input.trim().length === 0) {
+                        return 'JSON configuration cannot be empty';
+                    }
+                    try {
+                        JSON.parse(input);
+                        return true;
+                    } catch (error) {
+                        return `Invalid JSON: ${error.message}`;
+                    }
+                }
+            }
+        ]);
+        
+        return jsonConfig;
+    }
 }
 
 // Function to generate MCP configuration from JSON
@@ -634,7 +716,7 @@ async function testExecutablePath(command) {
 
 // Function to get interactive configuration
 async function getInteractiveConfig(config) {
-    const defaultServerName = config.name || projectName || 'mcp-server';
+    const defaultServerName = config.extractedServerName || config.name || projectName || 'mcp-server';
     
     if (isForce) {
         return { 
