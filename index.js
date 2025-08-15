@@ -740,7 +740,7 @@ async function main() {
             config = generateMCPConfigFromJSON(jsonContent);
             jsonMode = true;
         } else if (!isForce && !isDryRun) {
-            // Ask if user wants to paste JSON
+            // Interactive mode - always give user choice
             const { inputMode } = await inquirer.prompt([
                 {
                     type: 'list',
@@ -781,12 +781,73 @@ async function main() {
                 config = generateMCPConfigFromJSON(jsonContent);
                 jsonMode = true;
             } else {
-                // Auto-detect mode
-                config = generateMCPConfig();
+                // Auto-detect mode - handle errors gracefully
+                try {
+                    config = generateMCPConfig();
+                } catch (error) {
+                    log(`⚠️  Auto-detection failed: ${error.message}`, 'warning');
+                    log('🎯 Please choose an alternative input method:', 'info');
+                    
+                    const { fallbackMode } = await inquirer.prompt([
+                        {
+                            type: 'list',
+                            name: 'fallbackMode',
+                            message: 'Auto-detection failed. What would you like to do?',
+                            choices: [
+                                { name: 'Paste JSON configuration', value: 'json' },
+                                { name: 'Load JSON from file', value: 'file' },
+                                { name: 'Exit and use --json flags instead', value: 'exit' }
+                            ],
+                            default: 'json'
+                        }
+                    ]);
+                    
+                    if (fallbackMode === 'json') {
+                        const jsonStr = await promptForJSONInput();
+                        config = generateMCPConfigFromJSON(jsonStr);
+                        jsonMode = true;
+                    } else if (fallbackMode === 'file') {
+                        const { filePath } = await inquirer.prompt([
+                            {
+                                type: 'input',
+                                name: 'filePath',
+                                message: 'Enter path to JSON file:',
+                                validate: (input) => {
+                                    if (!input || input.trim().length === 0) {
+                                        return 'File path cannot be empty';
+                                    }
+                                    const absolutePath = path.isAbsolute(input) ? input : path.join(cwd, input);
+                                    if (!fs.existsSync(absolutePath)) {
+                                        return `File not found: ${absolutePath}`;
+                                    }
+                                    return true;
+                                }
+                            }
+                        ]);
+                        const jsonContent = readJSONFromFile(filePath);
+                        config = generateMCPConfigFromJSON(jsonContent);
+                        jsonMode = true;
+                    } else {
+                        log('💡 Use --json or --json-file flags for direct configuration:', 'info');
+                        log('Examples:', 'info');
+                        log('  mcp-auto-add --json \'{"command":"npx","args":["-y","tool"]}\'', 'info');
+                        log('  mcp-auto-add --json-file ./config.json', 'info');
+                        process.exit(0);
+                    }
+                }
             }
         } else {
-            // Force or dry-run mode - use auto-detect
-            config = generateMCPConfig();
+            // Force or dry-run mode - try auto-detect, but provide helpful error if it fails
+            try {
+                config = generateMCPConfig();
+            } catch (error) {
+                log(`❌ Auto-detection failed: ${error.message}`, 'error');
+                log('💡 Try using --json or --json-file flags to provide configuration manually:', 'info');
+                log('Examples:', 'info');
+                log('  mcp-auto-add --json \'{"command":"npx","args":["-y","tool"]}\' --dry-run', 'info');
+                log('  mcp-auto-add --json-file ./config.json --force', 'info');
+                process.exit(1);
+            }
         }
         
         // Handle URL-based configurations specially
