@@ -13,6 +13,12 @@ const isForce = args.includes('--force') || args.includes('-f');
 const isDryRun = args.includes('--dry-run') || args.includes('-d');
 const showHelp = args.includes('--help') || args.includes('-h');
 
+// JSON input handling
+const jsonFlagIndex = args.findIndex(arg => arg === '--json' || arg === '-j');
+const jsonFileFlagIndex = args.findIndex(arg => arg === '--json-file' || arg === '-jf');
+const jsonInput = jsonFlagIndex !== -1 && args[jsonFlagIndex + 1] ? args[jsonFlagIndex + 1] : null;
+const jsonFileInput = jsonFileFlagIndex !== -1 && args[jsonFileFlagIndex + 1] ? args[jsonFileFlagIndex + 1] : null;
+
 // Show help and exit if requested
 if (showHelp) {
     console.log(`
@@ -20,18 +26,31 @@ if (showHelp) {
 
 USAGE:
     mcp-auto-add [OPTIONS]
+    mcp-auto-add --json '<json_config>' [OPTIONS]
+    mcp-auto-add --json-file <path_to_json> [OPTIONS]
 
 OPTIONS:
-    -f, --force      Skip confirmation prompts and use defaults
-    -v, --verbose    Show detailed verbose output
-    -d, --dry-run    Show what would be done without executing
-    -h, --help       Show this help message
+    -f, --force              Skip confirmation prompts and use defaults
+    -v, --verbose            Show detailed verbose output
+    -d, --dry-run            Show what would be done without executing
+    -j, --json <config>      Provide JSON configuration directly
+    -jf, --json-file <path>  Read JSON configuration from file
+    -h, --help               Show this help message
 
 EXAMPLES:
     mcp-auto-add                    # Interactive mode with prompts
     mcp-auto-add --force            # Auto-add with user scope (no prompts)
     mcp-auto-add --dry-run          # See what would be done
     mcp-auto-add --verbose          # Detailed logging
+    
+    # Using JSON input directly
+    mcp-auto-add --json '{"command":"npx","args":["-y","gemini-mcp-tool"]}'
+    
+    # Using JSON from file
+    mcp-auto-add --json-file ./mcp-config.json
+    
+    # URL-based configuration
+    mcp-auto-add --json '{"url":"https://gitmcp.io/docs"}'
 
 PROJECT DETECTION:
     Python      - pyproject.toml, requirements.txt, or setup.py
@@ -241,6 +260,112 @@ function buildTypeScriptProject() {
         log(`Error: ${error.message}`, 'error');
         return false;
     }
+}
+
+// Function to parse JSON configuration from various formats
+function parseJSONConfig(jsonStr, serverName = null) {
+    try {
+        const parsed = JSON.parse(jsonStr);
+        
+        // Handle URL-based configuration (like gitmcp)
+        if (parsed.url) {
+            log('📌 Detected URL-based MCP configuration', 'info');
+            return {
+                url: parsed.url,
+                description: parsed.description || `URL-based MCP server: ${parsed.url}`,
+                name: parsed.name || serverName
+            };
+        }
+        
+        // Handle standard command-based configuration
+        const config = {
+            command: parsed.command,
+            args: parsed.args || [],
+            env: parsed.env || {},
+            description: parsed.description || parsed.name || 'MCP server from JSON',
+            cwd: parsed.cwd,
+            enabled: parsed.enabled !== false
+        };
+        
+        // Clean up undefined values
+        Object.keys(config).forEach(key => {
+            if (config[key] === undefined) {
+                delete config[key];
+            }
+        });
+        
+        return config;
+    } catch (error) {
+        throw new Error(`Invalid JSON configuration: ${error.message}`);
+    }
+}
+
+// Function to read JSON from file
+function readJSONFromFile(filePath) {
+    try {
+        const absolutePath = path.isAbsolute(filePath) ? filePath : path.join(cwd, filePath);
+        if (!fs.existsSync(absolutePath)) {
+            throw new Error(`JSON file not found: ${absolutePath}`);
+        }
+        
+        const content = fs.readFileSync(absolutePath, 'utf8');
+        return content;
+    } catch (error) {
+        throw new Error(`Failed to read JSON file: ${error.message}`);
+    }
+}
+
+// Function to prompt for JSON input interactively
+async function promptForJSONInput() {
+    console.log(chalk.cyan('\n📋 You can paste multi-line JSON. Press Enter twice when done.\n'));
+    
+    const { jsonConfig } = await inquirer.prompt([
+        {
+            type: 'editor',
+            name: 'jsonConfig',
+            message: 'Paste or type your MCP JSON configuration:',
+            validate: (input) => {
+                if (!input || input.trim().length === 0) {
+                    return 'JSON configuration cannot be empty';
+                }
+                try {
+                    JSON.parse(input);
+                    return true;
+                } catch (error) {
+                    return `Invalid JSON: ${error.message}`;
+                }
+            }
+        }
+    ]);
+    
+    return jsonConfig;
+}
+
+// Function to generate MCP configuration from JSON
+function generateMCPConfigFromJSON(jsonStr, serverName = null) {
+    log('🔧 Generating MCP configuration from JSON...', 'info');
+    
+    const config = parseJSONConfig(jsonStr, serverName);
+    
+    if (config.url) {
+        // URL-based configuration needs special handling
+        log('📌 URL-based configuration detected', 'info');
+        log(`URL: ${config.url}`, 'info');
+        
+        // For URL-based configs, we'll create a special format
+        return {
+            url: config.url,
+            description: config.description,
+            isUrlBased: true
+        };
+    }
+    
+    log('✅ MCP configuration parsed from JSON successfully', 'success');
+    logVerbose(`Command: ${config.command}`);
+    logVerbose(`Args: ${JSON.stringify(config.args)}`);
+    logVerbose(`Environment variables: ${Object.keys(config.env || {}).length} found`);
+    
+    return config;
 }
 
 // Function to generate MCP configuration
@@ -509,36 +634,45 @@ async function testExecutablePath(command) {
 
 // Function to get interactive configuration
 async function getInteractiveConfig(config) {
+    const defaultServerName = config.name || projectName || 'mcp-server';
+    
     if (isForce) {
         return { 
             ...config, 
             scope: 'user', 
-            serverName: projectName,
+            serverName: defaultServerName,
             confirmed: true 
         };
     }
     
     log('📋 MCP Configuration Summary:', 'title');
-    log(`Server Name: ${projectName}`, 'info');
+    log(`Server Name: ${defaultServerName}`, 'info');
     log(`Command: ${config.command}`, 'info');
-    log(`Arguments: ${config.args.join(' ')}`, 'info');
+    log(`Arguments: ${config.args ? config.args.join(' ') : '(none)'}`, 'info');
     log(`Description: ${config.description}`, 'info');
-    log(`Environment Variables: ${Object.keys(config.env).length}`, 'info');
+    log(`Environment Variables: ${Object.keys(config.env || {}).length}`, 'info');
+    if (config.cwd) {
+        log(`Working Directory: ${config.cwd}`, 'info');
+    }
     
-    // Test executable path
-    const executableValid = await testExecutablePath(config.command);
-    if (!executableValid) {
-        const { continueAnyway } = await inquirer.prompt([
-            {
-                type: 'confirm',
-                name: 'continueAnyway',
-                message: 'Executable test failed. Continue anyway?',
-                default: false
+    // Test executable path only if it's not a standard command
+    const shouldTestExecutable = config.command && !['npx', 'npm', 'yarn', 'pnpm', 'bun', 'uvx'].includes(config.command.split('/').pop());
+    
+    if (shouldTestExecutable) {
+        const executableValid = await testExecutablePath(config.command);
+        if (!executableValid) {
+            const { continueAnyway } = await inquirer.prompt([
+                {
+                    type: 'confirm',
+                    name: 'continueAnyway',
+                    message: 'Executable test failed. Continue anyway?',
+                    default: false
+                }
+            ]);
+            
+            if (!continueAnyway) {
+                throw new Error('Cancelled due to executable validation failure');
             }
-        ]);
-        
-        if (!continueAnyway) {
-            throw new Error('Cancelled due to executable validation failure');
         }
     }
     
@@ -558,7 +692,7 @@ async function getInteractiveConfig(config) {
             type: 'input',
             name: 'serverName',
             message: 'Server name:',
-            default: projectName,
+            default: defaultServerName,
             validate: (input) => {
                 if (!input || input.trim().length === 0) {
                     return 'Server name cannot be empty';
@@ -590,8 +724,82 @@ async function getInteractiveConfig(config) {
 // Main function
 async function main() {
     try {
-        // Generate MCP configuration
-        const config = generateMCPConfig();
+        let config;
+        let jsonMode = false;
+        
+        // Check for JSON input modes
+        if (jsonInput) {
+            // Direct JSON from command line
+            log('📄 Using JSON configuration from command line', 'info');
+            config = generateMCPConfigFromJSON(jsonInput);
+            jsonMode = true;
+        } else if (jsonFileInput) {
+            // JSON from file
+            log(`📁 Reading JSON configuration from file: ${jsonFileInput}`, 'info');
+            const jsonContent = readJSONFromFile(jsonFileInput);
+            config = generateMCPConfigFromJSON(jsonContent);
+            jsonMode = true;
+        } else if (!isForce && !isDryRun) {
+            // Ask if user wants to paste JSON
+            const { inputMode } = await inquirer.prompt([
+                {
+                    type: 'list',
+                    name: 'inputMode',
+                    message: 'How would you like to configure the MCP server?',
+                    choices: [
+                        { name: 'Auto-detect from current directory', value: 'auto' },
+                        { name: 'Paste JSON configuration', value: 'json' },
+                        { name: 'Load JSON from file', value: 'file' }
+                    ],
+                    default: 'auto'
+                }
+            ]);
+            
+            if (inputMode === 'json') {
+                const jsonStr = await promptForJSONInput();
+                config = generateMCPConfigFromJSON(jsonStr);
+                jsonMode = true;
+            } else if (inputMode === 'file') {
+                const { filePath } = await inquirer.prompt([
+                    {
+                        type: 'input',
+                        name: 'filePath',
+                        message: 'Enter path to JSON file:',
+                        validate: (input) => {
+                            if (!input || input.trim().length === 0) {
+                                return 'File path cannot be empty';
+                            }
+                            const absolutePath = path.isAbsolute(input) ? input : path.join(cwd, input);
+                            if (!fs.existsSync(absolutePath)) {
+                                return `File not found: ${absolutePath}`;
+                            }
+                            return true;
+                        }
+                    }
+                ]);
+                const jsonContent = readJSONFromFile(filePath);
+                config = generateMCPConfigFromJSON(jsonContent);
+                jsonMode = true;
+            } else {
+                // Auto-detect mode
+                config = generateMCPConfig();
+            }
+        } else {
+            // Force or dry-run mode - use auto-detect
+            config = generateMCPConfig();
+        }
+        
+        // Handle URL-based configurations specially
+        if (config.isUrlBased) {
+            log('⚠️  URL-based MCP servers require special handling', 'warning');
+            log('📌 Please add this configuration manually to your Claude Code settings', 'info');
+            log(`URL: ${config.url}`, 'info');
+            if (config.description) {
+                log(`Description: ${config.description}`, 'info');
+            }
+            log('💡 URL-based servers are typically handled differently than command-based servers', 'info');
+            process.exit(0);
+        }
         
         // Get interactive configuration with scope and server name
         const interactiveConfig = await getInteractiveConfig(config);
