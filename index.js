@@ -48,7 +48,7 @@ REQUIREMENTS:
     - For Python: uv package manager and .venv environment
     - For TypeScript: Build tools (npm/yarn/pnpm/bun)
 
-For more information, visit: https://github.com/yourusername/mcp-auto-add
+For more information, visit: https://github.com/gyasis/mcp-auto-add
 `);
     process.exit(0);
 }

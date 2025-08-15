@@ -18,7 +18,7 @@
     "automation",
     "cli"
   ],
-  "author": "Your Name",
+  "author": "gyasis",
   "license": "MIT",
   "dependencies": {
     "commander": "^11.1.0",
@@ -30,10 +30,10 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/yourusername/mcp-auto-add"
+    "url": "https://github.com/gyasis/mcp-auto-add"
   },
   "bugs": {
-    "url": "https://github.com/yourusername/mcp-auto-add/issues"
+    "url": "https://github.com/gyasis/mcp-auto-add/issues"
   },
-  "homepage": "https://github.com/yourusername/mcp-auto-add#readme"
+  "homepage": "https://github.com/gyasis/mcp-auto-add#readme"
 } 
