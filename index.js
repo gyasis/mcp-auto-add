@@ -288,8 +288,32 @@ function buildTypeScriptProject() {
 
 // Function to parse JSON configuration from various formats
 function parseJSONConfig(jsonStr, serverName = null) {
+    let parsed;
+    
     try {
-        const parsed = JSON.parse(jsonStr);
+        parsed = JSON.parse(jsonStr);
+    } catch (error) {
+        // Try to fix common JSON fragment issues
+        let fixedJson = jsonStr.trim();
+        
+        // Check if it looks like a JSON fragment (starts with a key)
+        if (fixedJson.match(/^"[^"]+"\s*:\s*\{/) || fixedJson.match(/^[a-zA-Z_][a-zA-Z0-9_]*\s*:\s*\{/)) {
+            // This looks like a JSON fragment, wrap it in braces
+            fixedJson = `{${fixedJson}}`;
+            log('🔧 Detected JSON fragment, attempting to wrap in braces...', 'info');
+            
+            try {
+                parsed = JSON.parse(fixedJson);
+                log('✅ Successfully parsed JSON fragment', 'success');
+            } catch (secondError) {
+                throw new Error(`Invalid JSON configuration: ${error.message}. Also tried wrapping as fragment: ${secondError.message}`);
+            }
+        } else {
+            throw new Error(`Invalid JSON configuration: ${error.message}`);
+        }
+    }
+    
+    try {
         
         // Check if this is a wrapped format like {"server-name": { config }}
         const keys = Object.keys(parsed);
