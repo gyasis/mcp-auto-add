@@ -1,0 +1,39 @@
+{
+  "name": "mcp-auto-add",
+  "version": "1.0.0",
+  "description": "Automatically detect MCP projects and add them to Claude Code with one command",
+  "main": "index.js",
+  "bin": {
+    "mcp-auto-add": "./index.js"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "claude",
+    "claude-code",
+    "automation",
+    "cli"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "dependencies": {
+    "commander": "^11.1.0",
+    "chalk": "^4.1.2",
+    "inquirer": "^8.2.6"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yourusername/mcp-auto-add"
+  },
+  "bugs": {
+    "url": "https://github.com/yourusername/mcp-auto-add/issues"
+  },
+  "homepage": "https://github.com/yourusername/mcp-auto-add#readme"
+} 
