@@ -7,6 +7,8 @@ This global Node.js package revolutionizes MCP development by automatically dete
 ## ✨ Features
 
 - **🔍 Auto-Detection**: Automatically detects Python, Node.js, or TypeScript MCP projects
+- **🎯 Multiple Input Modes**: Interactive menu, auto-detect, clipboard, JSON paste, or file input
+- **📋 Clipboard Integration**: Read JSON configurations directly from system clipboard
 - **🔧 Smart Configuration**: Generates the correct MCP configuration based on project structure
 - **🎯 Interactive Prompts**: Choose scope (user/local/project) and customize server name
 - **🧪 Path Validation**: Tests executable paths before adding to ensure they work
@@ -14,6 +16,7 @@ This global Node.js package revolutionizes MCP development by automatically dete
 - **📦 Global Installation**: Install once, use anywhere in your environment
 - **🔨 Build Integration**: Automatically builds TypeScript projects when needed
 - **🌍 Environment Support**: Reads `.env` files and handles environment variables
+- **📤 Command Generation**: Generate ready-to-paste `claude mcp add-json` commands
 - **🎨 Beautiful Output**: Colored, timestamped logging with progress indicators
 - **🛡️ Production Ready**: Comprehensive error handling with actionable guidance
 
@@ -33,52 +36,83 @@ npm install -g .
 
 ### Basic Usage
 
-```bash
-# Navigate to any MCP project directory
-cd /path/to/your/mcp-project
+The tool supports three main usage patterns:
 
-# Run the magic command
+```bash
+# 1. Interactive mode (default) - Shows menu with choices
 mcp-auto-add
+
+# 2. Auto-detect mode - Directly detects from current folder
+cd /path/to/your/mcp-project
+mcp-auto-add .
+
+# 3. Clipboard mode - Reads JSON config from clipboard
+mcp-auto-add --clipboard
 ```
 
-That's it! The tool will:
-1. 🔍 Detect your project type (Python/Node.js/TypeScript)
+**Interactive Mode** will:
+1. 🎯 Show you a menu of configuration options
+2. 🔍 Auto-detect, JSON paste, file input, or clipboard reading
+3. 🧪 Validate executable paths and configuration
+4. 📝 Allow scope and server name customization  
+5. 🚀 Add the server to Claude Code
+
+**Auto-detect Mode** will:
+1. 🔍 Directly detect your project type (Python/Node.js/TypeScript)
 2. 🧪 Validate the executable paths
 3. 🎯 Prompt for scope selection (defaults to "user")
 4. 📝 Allow server name customization
 5. 🔧 Generate the correct MCP configuration
 6. 🚀 Automatically add it to Claude Code
-7. ✅ Confirm success
 
 ## 📋 Command Line Options
 
 ```bash
-mcp-auto-add [OPTIONS]
+mcp-auto-add [OPTIONS]              # Interactive mode with menu
+mcp-auto-add . [OPTIONS]            # Auto-detect from current folder  
+mcp-auto-add --clipboard [OPTIONS]  # Read JSON from clipboard
 
 Options:
-  -f, --force      Skip confirmation prompts and use defaults
-  -v, --verbose    Show detailed verbose output
-  -d, --dry-run    Show what would be done without executing
-  -h, --help       Show help information
+  -f, --force                  Skip confirmation prompts and use defaults
+  -v, --verbose                Show detailed verbose output
+  -d, --dry-run                Show what would be done without executing
+  -j, --json <config>          Provide JSON configuration directly
+  -jf, --json-file <path>      Read JSON configuration from file
+  -c, --clipboard              Read JSON configuration from clipboard
+  -g, --generate-command       Generate claude command and copy to clipboard
+  -h, --help                   Show help information
 ```
 
 ### Examples
 
 ```bash
-# Interactive mode with prompts (recommended)
+# Interactive mode - shows menu of choices (recommended)
 mcp-auto-add
 
-# Force mode - auto-add with user scope, no prompts
-mcp-auto-add --force
+# Auto-detect mode - directly tries to detect from current folder
+mcp-auto-add .
 
-# Dry run - see what would be done without executing
-mcp-auto-add --dry-run
+# Clipboard mode - reads JSON config from clipboard
+mcp-auto-add --clipboard
 
-# Verbose mode - detailed logging for debugging
-mcp-auto-add --verbose
+# Direct JSON input
+mcp-auto-add --json '{"command":"npx","args":["-y","gemini-mcp-tool"]}'
 
-# Combine options
-mcp-auto-add --dry-run --verbose
+# JSON from file
+mcp-auto-add --json-file ./mcp-config.json
+
+# Generate command for clipboard (no execution)
+mcp-auto-add --json '{"command":"npx","args":["-y","tool"]}' --generate-command
+mcp-auto-add --clipboard --generate-command
+
+# Force mode options
+mcp-auto-add --force            # Interactive with defaults
+mcp-auto-add . --force          # Force auto-detect mode
+mcp-auto-add --clipboard --force # Force clipboard mode
+
+# Testing and debugging
+mcp-auto-add --dry-run          # See what would be done
+mcp-auto-add . --verbose        # Detailed logging with auto-detect
 ```
 
 ## 🔍 Project Detection
@@ -117,6 +151,59 @@ You can customize the server name instead of using the default directory name.
 
 ### Executable Validation
 The tool tests executable paths before adding them to ensure they're valid and accessible.
+
+## 📋 Clipboard Integration
+
+The clipboard feature allows you to copy JSON configurations from anywhere and paste them directly into the tool:
+
+### Using Clipboard Mode
+
+```bash
+# Copy any MCP JSON configuration to your clipboard, then:
+mcp-auto-add --clipboard
+```
+
+### Supported JSON Formats
+
+The tool handles various JSON configuration formats:
+
+```bash
+# Standard MCP configuration
+{"command": "npx", "args": ["-y", "gemini-mcp-tool"]}
+
+# Wrapped format (from Claude settings)
+{"gitmcp": {"url": "https://gitmcp.io/docs"}}
+
+# URL-based configuration
+{"url": "https://example.com/mcp-server"}
+
+# Full configuration with environment
+{
+  "command": "python",
+  "args": ["server.py"],
+  "env": {"API_KEY": "value"},
+  "description": "My MCP server"
+}
+```
+
+### Cross-Platform Support
+
+The clipboard integration works across platforms:
+- **Linux**: Uses `xclip` or `xsel`
+- **macOS**: Uses `pbpaste`
+- **Auto-detection**: Tries each tool automatically
+
+### Generate Commands for Clipboard
+
+You can also generate `claude mcp add-json` commands and copy them to clipboard:
+
+```bash
+# Generate command from JSON and copy to clipboard
+mcp-auto-add --json '{"command":"npx","args":["-y","tool"]}' --generate-command
+
+# Generate command from clipboard JSON
+mcp-auto-add --clipboard --generate-command
+```
 
 ## 🔧 Configuration
 
@@ -230,6 +317,45 @@ mcp-auto-add
 claude mcp list
 ```
 
+### Using Clipboard for Quick Setup
+
+```bash
+# Copy a JSON configuration to clipboard from anywhere, then:
+$ mcp-auto-add --clipboard
+
+[2025-08-15T14:30:00.000Z] 🚀 MCP Auto-Add - Automatically adding MCP server to Claude Code
+[2025-08-15T14:30:00.000Z] 📋 Reading JSON configuration from clipboard...
+[2025-08-15T14:30:00.000Z] ✅ Successfully read content from clipboard
+[2025-08-15T14:30:00.000Z] 📦 Detected wrapped JSON format with server name: "gitmcp"
+[2025-08-15T14:30:00.000Z] 📌 Detected URL-based MCP configuration
+[2025-08-15T14:30:00.000Z] ✅ MCP configuration parsed from JSON successfully
+
+? Choose MCP server scope: user - Available to you across all projects (recommended)
+? Server name: gitmcp
+? Add this MCP server to Claude Code? Yes
+
+[2025-08-15T14:30:05.000Z] 🚀 Executing Claude MCP add-json command...
+[2025-08-15T14:30:05.000Z] ✅ MCP server added to Claude Code successfully!
+[2025-08-15T14:30:05.000Z] 🎉 MCP Auto-Add completed successfully!
+```
+
+### Generate Commands for Later Use
+
+```bash
+# Generate command and copy to clipboard for manual execution
+$ mcp-auto-add --clipboard --generate-command
+
+[2025-08-15T14:30:00.000Z] 📋 Reading JSON configuration from clipboard...
+[2025-08-15T14:30:00.000Z] ✅ Successfully read content from clipboard
+[2025-08-15T14:30:00.000Z] 📋 Generated Claude MCP command:
+
+claude mcp add-json gitmcp '{"url":"https://gitmcp.io/docs"}' -s user
+
+[2025-08-15T14:30:00.000Z] ✅ Command copied to clipboard using xclip
+[2025-08-15T14:30:00.000Z] 📌 You can now paste it in your terminal with Ctrl+V
+[2025-08-15T14:30:00.000Z] 💡 To run: paste the command in your terminal
+```
+
 ## 🔍 Troubleshooting
 
 ### Common Issues and Solutions
@@ -282,11 +408,31 @@ mcp-auto-add --dry-run --verbose
 Skip all prompts and use defaults:
 
 ```bash
-# Automatically uses:
-# - user scope
-# - directory name as server name
-# - no confirmation prompts
+# Force auto-detect mode
+mcp-auto-add . --force
+
+# Force clipboard mode  
+mcp-auto-add --clipboard --force
+
+# Force interactive mode with defaults
 mcp-auto-add --force
+```
+
+### Clipboard Workflows
+
+Streamline configuration sharing and automation:
+
+```bash
+# Copy JSON config from documentation/emails/chat
+# Then paste directly into tool
+mcp-auto-add --clipboard
+
+# Generate commands for team sharing
+mcp-auto-add --clipboard --generate-command
+
+# Chain clipboard operations
+echo '{"command":"npx","args":["-y","tool"]}' | xclip -selection clipboard
+mcp-auto-add --clipboard --dry-run
 ```
 
 ### Custom Entry Points

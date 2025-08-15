@@ -12,12 +12,15 @@ const isVerbose = args.includes('--verbose') || args.includes('-v');
 const isForce = args.includes('--force') || args.includes('-f');
 const isDryRun = args.includes('--dry-run') || args.includes('-d');
 const showHelp = args.includes('--help') || args.includes('-h');
+const generateCommand = args.includes('--generate-command') || args.includes('-g');
+const useClipboard = args.includes('--clipboard') || args.includes('-c');
 
-// JSON input handling
+// Input mode detection
 const jsonFlagIndex = args.findIndex(arg => arg === '--json' || arg === '-j');
 const jsonFileFlagIndex = args.findIndex(arg => arg === '--json-file' || arg === '-jf');
 const jsonInput = jsonFlagIndex !== -1 && args[jsonFlagIndex + 1] ? args[jsonFlagIndex + 1] : null;
 const jsonFileInput = jsonFileFlagIndex !== -1 && args[jsonFileFlagIndex + 1] ? args[jsonFileFlagIndex + 1] : null;
+const autoDetectMode = args.includes('.');
 
 // Show help and exit if requested
 if (showHelp) {
@@ -25,35 +28,53 @@ if (showHelp) {
 🚀 MCP Auto-Add - Automatically detect and add MCP servers to Claude Code
 
 USAGE:
-    mcp-auto-add [OPTIONS]
-    mcp-auto-add --json '<json_config>' [OPTIONS]
-    mcp-auto-add --json-file <path_to_json> [OPTIONS]
+    mcp-auto-add [OPTIONS]              # Interactive mode with menu
+    mcp-auto-add . [OPTIONS]            # Auto-detect from current folder
+    mcp-auto-add --clipboard [OPTIONS]  # Read JSON from clipboard
+    mcp-auto-add --json '<config>' [OPTIONS]      # Direct JSON input
+    mcp-auto-add --json-file <path> [OPTIONS]     # JSON from file
 
 OPTIONS:
-    -f, --force              Skip confirmation prompts and use defaults
-    -v, --verbose            Show detailed verbose output
-    -d, --dry-run            Show what would be done without executing
-    -j, --json <config>      Provide JSON configuration directly
-    -jf, --json-file <path>  Read JSON configuration from file
-    -h, --help               Show this help message
+    -f, --force                  Skip confirmation prompts and use defaults
+    -v, --verbose                Show detailed verbose output
+    -d, --dry-run                Show what would be done without executing
+    -j, --json <config>          Provide JSON configuration directly
+    -jf, --json-file <path>      Read JSON configuration from file
+    -c, --clipboard              Read JSON configuration from clipboard
+    -g, --generate-command       Generate claude command and copy to clipboard
+    -h, --help                   Show this help message
 
 EXAMPLES:
-    mcp-auto-add                    # Interactive mode with prompts
-    mcp-auto-add --force            # Auto-add with user scope (no prompts)
-    mcp-auto-add --dry-run          # See what would be done
-    mcp-auto-add --verbose          # Detailed logging
+    # Interactive mode - shows menu of choices (default)
+    mcp-auto-add
     
-    # Using JSON input directly
+    # Auto-detect mode - directly tries to detect from current folder
+    mcp-auto-add .
+    
+    # Clipboard mode - reads JSON config from clipboard
+    mcp-auto-add --clipboard
+    
+    # Direct JSON input
     mcp-auto-add --json '{"command":"npx","args":["-y","gemini-mcp-tool"]}'
     
-    # Using wrapped JSON format (copied from Claude settings)
-    mcp-auto-add --json '{"gitmcp":{"url":"https://gitmcp.io/docs"}}'
-    
-    # Using JSON from file
+    # JSON from file
     mcp-auto-add --json-file ./mcp-config.json
     
-    # URL-based configuration
-    mcp-auto-add --json '{"url":"https://gitmcp.io/docs"}'
+    # Wrapped JSON format (copied from Claude settings)
+    mcp-auto-add --json '{"gitmcp":{"url":"https://gitmcp.io/docs"}}'
+    
+    # Generate command for clipboard (no execution)
+    mcp-auto-add --json '{"command":"npx","args":["-y","tool"]}' --generate-command
+    mcp-auto-add --clipboard --generate-command
+    
+    # Force mode options
+    mcp-auto-add --force            # Auto-add with user scope (no prompts)
+    mcp-auto-add . --force          # Force auto-detect mode
+    mcp-auto-add --clipboard --force # Force clipboard mode
+    
+    # Testing and debugging
+    mcp-auto-add --dry-run          # See what would be done
+    mcp-auto-add . --verbose        # Detailed logging with auto-detect
 
 PROJECT DETECTION:
     Python      - pyproject.toml, requirements.txt, or setup.py
@@ -565,6 +586,75 @@ function generateMCPConfig() {
     return config;
 }
 
+// Function to copy text to clipboard
+function copyToClipboard(text) {
+    try {
+        // Try xclip first (most common on Linux)
+        execSync(`echo '${text.replace(/'/g, "'\\''")}' | xclip -selection clipboard`, { stdio: 'ignore' });
+        return 'xclip';
+    } catch (error) {
+        try {
+            // Try xsel as fallback
+            execSync(`echo '${text.replace(/'/g, "'\\''")}' | xsel --clipboard --input`, { stdio: 'ignore' });
+            return 'xsel';
+        } catch (error) {
+            try {
+                // Try pbcopy on macOS
+                execSync(`echo '${text.replace(/'/g, "'\\''")}' | pbcopy`, { stdio: 'ignore' });
+                return 'pbcopy';
+            } catch (error) {
+                return null;
+            }
+        }
+    }
+}
+
+// Function to read text from clipboard
+function readFromClipboard() {
+    try {
+        // Try xclip first (most common on Linux)
+        const content = execSync('xclip -selection clipboard -o', { encoding: 'utf8' });
+        return content;
+    } catch (error) {
+        try {
+            // Try xsel as fallback
+            const content = execSync('xsel --clipboard --output', { encoding: 'utf8' });
+            return content;
+        } catch (error) {
+            try {
+                // Try pbpaste on macOS
+                const content = execSync('pbpaste', { encoding: 'utf8' });
+                return content;
+            } catch (error) {
+                throw new Error('Could not read from clipboard. Please install xclip, xsel, or use macOS pbpaste.');
+            }
+        }
+    }
+}
+
+// Function to generate claude command string
+function generateClaudeCommand(config, serverName, scope = 'user') {
+    // Create clean config for JSON (remove our added properties)
+    const cleanConfig = {
+        command: config.command,
+        args: config.args,
+        env: config.env,
+        description: config.description
+    };
+    
+    // Clean up undefined values
+    Object.keys(cleanConfig).forEach(key => {
+        if (cleanConfig[key] === undefined) {
+            delete cleanConfig[key];
+        }
+    });
+    
+    const configJson = JSON.stringify(cleanConfig);
+    const command = `claude mcp add-json ${serverName} '${configJson}' -s ${scope}`;
+    
+    return command;
+}
+
 // Function to execute claude mcp add-json command
 async function executeClaudeMCPAdd(config, serverName, scope = 'user') {
     log('🚀 Executing Claude MCP add-json command...', 'info');
@@ -809,8 +899,23 @@ async function main() {
         let config;
         let jsonMode = false;
         
-        // Check for JSON input modes
-        if (jsonInput) {
+        // Check for clipboard mode first
+        if (useClipboard) {
+            log('📋 Reading JSON configuration from clipboard...', 'info');
+            try {
+                const clipboardContent = readFromClipboard();
+                if (!clipboardContent || clipboardContent.trim().length === 0) {
+                    throw new Error('Clipboard is empty or contains no text');
+                }
+                log('✅ Successfully read content from clipboard', 'success');
+                config = generateMCPConfigFromJSON(clipboardContent.trim());
+                jsonMode = true;
+            } catch (error) {
+                log(`❌ Failed to read from clipboard: ${error.message}`, 'error');
+                log('💡 Make sure you have JSON configuration copied to your clipboard', 'info');
+                process.exit(1);
+            }
+        } else if (jsonInput) {
             // Direct JSON from command line
             log('📄 Using JSON configuration from command line', 'info');
             config = generateMCPConfigFromJSON(jsonInput);
@@ -821,6 +926,19 @@ async function main() {
             const jsonContent = readJSONFromFile(jsonFileInput);
             config = generateMCPConfigFromJSON(jsonContent);
             jsonMode = true;
+        } else if (autoDetectMode) {
+            // Auto-detect mode - directly try to detect from current folder
+            log('🔍 Auto-detecting MCP configuration from current directory...', 'info');
+            try {
+                config = generateMCPConfig();
+            } catch (error) {
+                log(`❌ Auto-detection failed: ${error.message}`, 'error');
+                log('💡 Try using --json or --json-file flags to provide configuration manually:', 'info');
+                log('Examples:', 'info');
+                log('  mcp-auto-add --json \'{"command":"npx","args":["-y","tool"]}\' --dry-run', 'info');
+                log('  mcp-auto-add --json-file ./config.json --force', 'info');
+                process.exit(1);
+            }
         } else if (!isForce && !isDryRun) {
             // Interactive mode - always give user choice
             const { inputMode } = await inquirer.prompt([
@@ -831,7 +949,8 @@ async function main() {
                     choices: [
                         { name: 'Auto-detect from current directory', value: 'auto' },
                         { name: 'Paste JSON configuration', value: 'json' },
-                        { name: 'Load JSON from file', value: 'file' }
+                        { name: 'Load JSON from file', value: 'file' },
+                        { name: 'Read JSON from clipboard', value: 'clipboard' }
                     ],
                     default: 'auto'
                 }
@@ -862,6 +981,20 @@ async function main() {
                 const jsonContent = readJSONFromFile(filePath);
                 config = generateMCPConfigFromJSON(jsonContent);
                 jsonMode = true;
+            } else if (inputMode === 'clipboard') {
+                try {
+                    const clipboardContent = readFromClipboard();
+                    if (!clipboardContent || clipboardContent.trim().length === 0) {
+                        throw new Error('Clipboard is empty or contains no text');
+                    }
+                    log('✅ Successfully read content from clipboard', 'success');
+                    config = generateMCPConfigFromJSON(clipboardContent.trim());
+                    jsonMode = true;
+                } catch (error) {
+                    log(`❌ Failed to read from clipboard: ${error.message}`, 'error');
+                    log('💡 Make sure you have JSON configuration copied to your clipboard', 'info');
+                    process.exit(1);
+                }
             } else {
                 // Auto-detect mode - handle errors gracefully
                 try {
@@ -878,6 +1011,7 @@ async function main() {
                             choices: [
                                 { name: 'Paste JSON configuration', value: 'json' },
                                 { name: 'Load JSON from file', value: 'file' },
+                                { name: 'Read JSON from clipboard', value: 'clipboard' },
                                 { name: 'Exit and use --json flags instead', value: 'exit' }
                             ],
                             default: 'json'
@@ -909,11 +1043,26 @@ async function main() {
                         const jsonContent = readJSONFromFile(filePath);
                         config = generateMCPConfigFromJSON(jsonContent);
                         jsonMode = true;
+                    } else if (fallbackMode === 'clipboard') {
+                        try {
+                            const clipboardContent = readFromClipboard();
+                            if (!clipboardContent || clipboardContent.trim().length === 0) {
+                                throw new Error('Clipboard is empty or contains no text');
+                            }
+                            log('✅ Successfully read content from clipboard', 'success');
+                            config = generateMCPConfigFromJSON(clipboardContent.trim());
+                            jsonMode = true;
+                        } catch (error) {
+                            log(`❌ Failed to read from clipboard: ${error.message}`, 'error');
+                            log('💡 Make sure you have JSON configuration copied to your clipboard', 'info');
+                            process.exit(1);
+                        }
                     } else {
                         log('💡 Use --json or --json-file flags for direct configuration:', 'info');
                         log('Examples:', 'info');
                         log('  mcp-auto-add --json \'{"command":"npx","args":["-y","tool"]}\'', 'info');
                         log('  mcp-auto-add --json-file ./config.json', 'info');
+                        log('  mcp-auto-add --clipboard', 'info');
                         process.exit(0);
                     }
                 }
@@ -941,6 +1090,32 @@ async function main() {
                 log(`Description: ${config.description}`, 'info');
             }
             log('💡 URL-based servers are typically handled differently than command-based servers', 'info');
+            process.exit(0);
+        }
+        
+        // Handle generate command mode
+        if (generateCommand) {
+            const defaultServerName = config.extractedServerName || config.name || projectName || 'mcp-server';
+            const defaultScope = 'user';
+            
+            const command = generateClaudeCommand(config, defaultServerName, defaultScope);
+            
+            log('📋 Generated Claude MCP command:', 'title');
+            console.log('\n' + chalk.green(command) + '\n');
+            
+            // Try to copy to clipboard
+            const clipboardTool = copyToClipboard(command);
+            if (clipboardTool) {
+                log(`✅ Command copied to clipboard using ${clipboardTool}`, 'success');
+                log('📌 You can now paste it in your terminal with Ctrl+V', 'info');
+            } else {
+                log('⚠️  Could not copy to clipboard (install xclip, xsel, or pbcopy)', 'warning');
+                log('📋 Please copy the command above manually', 'info');
+            }
+            
+            log(`🎯 Server: ${defaultServerName}`, 'info');
+            log(`📍 Scope: ${defaultScope}`, 'info');
+            log('💡 To run: paste the command in your terminal', 'info');
             process.exit(0);
         }
         
