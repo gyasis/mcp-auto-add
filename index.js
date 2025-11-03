@@ -159,8 +159,32 @@ function detectProjectType() {
 function findNodeExecutable() {
     logVerbose('🔍 Finding Node.js executable...');
     
+    // First, check if 'node' is available in PATH (preferred for portability)
     try {
-        // First try 'which node'
+        const nodeVersion = execSync('node --version', { encoding: 'utf8' }).trim();
+        if (nodeVersion) {
+            logVerbose(`Found Node.js in PATH: ${nodeVersion}`);
+            // If node is in PATH, prefer using just 'node' for portability
+            // Only use absolute path if we need to specify a particular version
+            try {
+                const whichNode = execSync('which node', { encoding: 'utf8' }).trim();
+                if (whichNode) {
+                    logVerbose(`Node.js command is at: ${whichNode}`);
+                    // Check if it's an nvm path - if so, we might want absolute path
+                    // But prefer 'node' if it's already in PATH (nvm sets up PATH)
+                    return 'node'; // Use command name for portability
+                }
+            } catch (error) {
+                logVerbose('Could not determine node location');
+            }
+            return 'node'; // Use command name if available in PATH
+        }
+    } catch (error) {
+        logVerbose('Node.js not available in PATH');
+    }
+    
+    // If not in PATH, try to find absolute path
+    try {
         const nodeExec = execSync('which node', { encoding: 'utf8' }).trim();
         if (nodeExec && fs.existsSync(nodeExec)) {
             logVerbose(`Found Node.js at: ${nodeExec}`);
@@ -170,23 +194,54 @@ function findNodeExecutable() {
         logVerbose('Node.js not found with "which node"');
     }
     
+    // Try nvm to get the active version path
     try {
-        // Try nvm
-        const nodeExec = execSync('nvm which node', { encoding: 'utf8' }).trim();
-        if (nodeExec && fs.existsSync(nodeExec)) {
-            logVerbose(`Found Node.js with nvm at: ${nodeExec}`);
-            return nodeExec;
+        // Source nvm if available and get node path
+        const nvmNode = execSync('bash -c "source ~/.nvm/nvm.sh && nvm which node"', { encoding: 'utf8' }).trim();
+        if (nvmNode && fs.existsSync(nvmNode)) {
+            logVerbose(`Found Node.js with nvm at: ${nvmNode}`);
+            return nvmNode;
         }
     } catch (error) {
-        logVerbose('Node.js not found with nvm');
+        try {
+            // Alternative: direct nvm command if nvm is loaded
+            const nodeExec = execSync('nvm which node', { encoding: 'utf8' }).trim();
+            if (nodeExec && fs.existsSync(nodeExec)) {
+                logVerbose(`Found Node.js with nvm at: ${nodeExec}`);
+                return nodeExec;
+            }
+        } catch (error2) {
+            logVerbose('Node.js not found with nvm');
+        }
     }
     
-    // Try common locations
+    // Try common locations using environment variables
+    const home = process.env.HOME || process.env.USERPROFILE || '';
     const commonPaths = [
         '/usr/local/bin/node',
-        '/usr/bin/node',
-        path.join(process.env.HOME || '', '.nvm/versions/node/*/bin/node')
+        '/usr/bin/node'
     ];
+    
+    // Try to find nvm node versions dynamically
+    if (home) {
+        try {
+            const nvmVersionsDir = path.join(home, '.nvm', 'versions', 'node');
+            if (fs.existsSync(nvmVersionsDir)) {
+                const versions = fs.readdirSync(nvmVersionsDir);
+                if (versions.length > 0) {
+                    // Get the latest or use NVM_CURRENT if set
+                    const currentVersion = process.env.NVM_CURRENT || versions[versions.length - 1];
+                    const nodePath = path.join(nvmVersionsDir, currentVersion, 'bin', 'node');
+                    if (fs.existsSync(nodePath)) {
+                        logVerbose(`Found Node.js in nvm at: ${nodePath}`);
+                        return nodePath;
+                    }
+                }
+            }
+        } catch (error) {
+            logVerbose('Could not scan nvm versions directory');
+        }
+    }
     
     for (const nodePath of commonPaths) {
         if (fs.existsSync(nodePath)) {
@@ -197,6 +252,94 @@ function findNodeExecutable() {
     
     logVerbose('Node.js not found in common locations');
     return '';
+}
+
+// Function to detect Claude Code installation location
+function findClaudeCodeInstallation() {
+    logVerbose('🔍 Finding Claude Code installation...');
+    
+    // Try to find claude command in PATH
+    try {
+        const claudePath = execSync('which claude', { encoding: 'utf8' }).trim();
+        if (claudePath && fs.existsSync(claudePath)) {
+            logVerbose(`Found Claude CLI at: ${claudePath}`);
+            return claudePath;
+        }
+    } catch (error) {
+        logVerbose('Claude CLI not found in PATH');
+    }
+    
+    // Try common installation locations
+    const home = process.env.HOME || process.env.USERPROFILE || '';
+    const commonPaths = [
+        path.join(home, '.local', 'bin', 'claude'),
+        path.join(home, 'bin', 'claude'),
+        '/usr/local/bin/claude',
+        '/usr/bin/claude'
+    ];
+    
+    for (const claudePath of commonPaths) {
+        if (fs.existsSync(claudePath)) {
+            logVerbose(`Found Claude CLI at: ${claudePath}`);
+            return claudePath;
+        }
+    }
+    
+    logVerbose('Claude Code installation not found in common locations');
+    return '';
+}
+
+// Function to detect MCP config file location based on scope
+function findMCPConfigPath(scope = 'user') {
+    logVerbose(`🔍 Finding MCP config file for scope: ${scope}...`);
+    
+    const home = process.env.HOME || process.env.USERPROFILE || '';
+    
+    if (scope === 'user') {
+        // User scope: ~/.cursor/mcp.json or ~/.claude/mcp.json
+        const userPaths = [
+            path.join(home, '.cursor', 'mcp.json'),
+            path.join(home, '.claude', 'mcp.json')
+        ];
+        
+        for (const configPath of userPaths) {
+            if (fs.existsSync(path.dirname(configPath))) {
+                logVerbose(`User MCP config will be at: ${configPath}`);
+                return configPath;
+            }
+        }
+        
+        // Default to .cursor if neither exists
+        const defaultPath = path.join(home, '.cursor', 'mcp.json');
+        logVerbose(`User MCP config will be created at: ${defaultPath}`);
+        return defaultPath;
+    } else if (scope === 'local') {
+        // Local scope: .cursor/mcp.json or .vscode/mcp.json in project directory
+        const localPaths = [
+            path.join(cwd, '.cursor', 'mcp.json'),
+            path.join(cwd, '.vscode', 'mcp.json')
+        ];
+        
+        for (const configPath of localPaths) {
+            if (fs.existsSync(path.dirname(configPath))) {
+                logVerbose(`Local MCP config found at: ${configPath}`);
+                return configPath;
+            }
+        }
+        
+        // Default to .cursor if neither exists
+        const defaultPath = path.join(cwd, '.cursor', 'mcp.json');
+        logVerbose(`Local MCP config will be created at: ${defaultPath}`);
+        return defaultPath;
+    } else if (scope === 'project') {
+        // Project scope: .mcp.json in project root
+        const projectPath = path.join(cwd, '.mcp.json');
+        logVerbose(`Project MCP config will be at: ${projectPath}`);
+        return projectPath;
+    }
+    
+    // Default fallback
+    return path.join(home, '.cursor', 'mcp.json');
 }
 
 // Function to check if package is installed globally
@@ -326,6 +469,7 @@ function parseJSONConfig(jsonStr, serverName = null) {
             
             // Recursively parse the inner configuration
             const config = parseJSONConfig(JSON.stringify(innerConfig), extractedServerName);
+            // Ensure extractedServerName is preserved from wrapper
             config.extractedServerName = extractedServerName;
             return config;
         }
@@ -333,11 +477,18 @@ function parseJSONConfig(jsonStr, serverName = null) {
         // Handle URL-based configuration (like gitmcp)
         if (parsed.url) {
             log('📌 Detected URL-based MCP configuration', 'info');
-            return {
+            const config = {
                 url: parsed.url,
                 description: parsed.description || `URL-based MCP server: ${parsed.url}`,
-                name: parsed.name || serverName
+                name: parsed.name || serverName,
+                isUrlBased: true,
+                transport: parsed.transport || 'sse' // Default to SSE transport
             };
+            // Preserve the extracted server name if provided
+            if (serverName) {
+                config.extractedServerName = serverName;
+            }
+            return config;
         }
         
         // Handle standard command-based configuration
@@ -483,6 +634,9 @@ function generateMCPConfigFromJSON(jsonStr, serverName = null) {
         return {
             url: config.url,
             description: config.description,
+            name: config.name,
+            extractedServerName: config.extractedServerName, // Preserve extracted server name
+            transport: config.transport,
             isUrlBased: true
         };
     }
@@ -679,6 +833,100 @@ function generateClaudeCommand(config, serverName, scope = 'user') {
     return command;
 }
 
+// Function to execute claude mcp add command for URL-based servers
+async function executeClaudeMCPAddURL(config, serverName, scope = 'user') {
+    log('🚀 Executing Claude MCP add command for URL-based server...', 'info');
+    
+    const transport = config.transport || 'sse';
+    const command = `claude mcp add --transport ${transport} ${serverName} ${config.url}`;
+    
+    logVerbose(`Full command: ${command}`);
+    
+    if (isDryRun) {
+        log('🔍 DRY RUN - Command would be executed:', 'warning');
+        log(command, 'info');
+        log('🔍 URL Configuration:', 'info');
+        log(`  Server Name: ${serverName}`, 'info');
+        log(`  URL: ${config.url}`, 'info');
+        log(`  Transport: ${transport}`, 'info');
+        log(`  Scope: ${scope}`, 'info');
+        return true;
+    }
+    
+    try {
+        // Check if claude command is available and detect installation location
+        log('🔍 Checking Claude CLI availability...', 'info');
+        const claudePath = findClaudeCodeInstallation();
+        if (claudePath) {
+            logVerbose(`✅ Claude CLI found at: ${claudePath}`);
+        } else {
+            try {
+                execSync('claude --version', { stdio: 'ignore' });
+                logVerbose('✅ Claude CLI is available in PATH');
+            } catch (error) {
+                throw new Error('Claude CLI is not installed or not in PATH. Please install Claude Code first.\nInstall from: https://claude.ai/download');
+            }
+        }
+        
+        // Detect and log MCP config file location
+        const configPath = findMCPConfigPath(scope);
+        logVerbose(`📝 MCP config will be written to: ${configPath}`);
+    } catch (error) {
+        throw new Error('Claude CLI is not installed or not in PATH. Please install Claude Code first.\nInstall from: https://claude.ai/download');
+    }
+    
+    try {
+        log(`📤 Adding URL-based MCP server "${serverName}" with ${transport.toUpperCase()} transport...`, 'info');
+        const result = execSync(command, { stdio: 'pipe', encoding: 'utf8' });
+        
+        // Parse result for success/error indicators
+        if (result.includes('error') || result.includes('Error') || result.includes('failed')) {
+            log('❌ Claude MCP command completed with errors:', 'error');
+            log(result, 'error');
+            return false;
+        }
+        
+        log(`✅ URL-based MCP server added to Claude Code successfully!`, 'success');
+        if (result && result.trim()) {
+            logVerbose(`Claude output: ${result.trim()}`);
+        }
+        return true;
+    } catch (error) {
+        log('❌ Failed to add URL-based MCP server to Claude Code', 'error');
+        
+        // Enhanced error reporting
+        if (error.status) {
+            log(`Exit code: ${error.status}`, 'error');
+        }
+        if (error.stderr) {
+            log(`STDERR: ${error.stderr}`, 'error');
+        }
+        if (error.stdout) {
+            log(`STDOUT: ${error.stdout}`, 'error');
+        }
+        
+        // Common error scenarios for URL servers
+        const errorMsg = error.message || '';
+        if (errorMsg.includes('Command failed')) {
+            log('💡 This might be due to:', 'warning');
+            log('  - Invalid URL format', 'warning');
+            log('  - Server name already exists', 'warning');
+            log('  - Network connectivity issues', 'warning');
+            log('  - Invalid transport type', 'warning');
+            
+            // Suggest troubleshooting steps
+            log('🔧 Try these troubleshooting steps:', 'info');
+            log('  1. Verify the URL is accessible', 'info');
+            log('  2. Try a different server name', 'info');
+            log('  3. Check your internet connection', 'info');
+            log('  4. Run "claude mcp list" to see existing servers', 'info');
+        }
+        
+        log(`Detailed error: ${error.message}`, 'error');
+        return false;
+    }
+}
+
 // Function to execute claude mcp add-json command
 async function executeClaudeMCPAdd(config, serverName, scope = 'user') {
     log('🚀 Executing Claude MCP add-json command...', 'info');
@@ -705,10 +953,23 @@ async function executeClaudeMCPAdd(config, serverName, scope = 'user') {
     }
     
     try {
-        // Check if claude command is available
+        // Check if claude command is available and detect installation location
         log('🔍 Checking Claude CLI availability...', 'info');
-        execSync('claude --version', { stdio: 'ignore' });
-        logVerbose('✅ Claude CLI is available');
+        const claudePath = findClaudeCodeInstallation();
+        if (claudePath) {
+            logVerbose(`✅ Claude CLI found at: ${claudePath}`);
+        } else {
+            try {
+                execSync('claude --version', { stdio: 'ignore' });
+                logVerbose('✅ Claude CLI is available in PATH');
+            } catch (error) {
+                throw new Error('Claude CLI is not installed or not in PATH. Please install Claude Code first.\nInstall from: https://claude.ai/download');
+            }
+        }
+        
+        // Detect and log MCP config file location
+        const configPath = findMCPConfigPath(scope);
+        logVerbose(`📝 MCP config will be written to: ${configPath}`);
     } catch (error) {
         throw new Error('Claude CLI is not installed or not in PATH. Please install Claude Code first.\nInstall from: https://claude.ai/download');
     }
@@ -829,8 +1090,9 @@ async function testExecutablePath(command) {
 }
 
 // Function to get interactive configuration
-async function getInteractiveConfig(config) {
-    const defaultServerName = config.extractedServerName || config.name || projectName || 'mcp-server';
+async function getInteractiveConfig(config, jsonMode = false) {
+    // For JSON/clipboard input, prioritize extracted name; for auto-detect, use project name
+    const defaultServerName = config.extractedServerName || config.name || (jsonMode ? 'mcp-server' : projectName) || 'mcp-server';
     
     if (isForce) {
         return { 
@@ -1107,19 +1369,151 @@ async function main() {
         
         // Handle URL-based configurations specially
         if (config.isUrlBased) {
-            log('⚠️  URL-based MCP servers require special handling', 'warning');
-            log('📌 Please add this configuration manually to your Claude Code settings', 'info');
+            log('🌐 URL-based MCP server detected', 'info');
             log(`URL: ${config.url}`, 'info');
-            if (config.description) {
-                log(`Description: ${config.description}`, 'info');
+            log(`Transport: ${config.transport || 'sse'}`, 'info');
+            
+            // Handle generate command mode for URL servers
+            if (generateCommand) {
+                // For JSON/clipboard input, prioritize extracted name; for auto-detect, use project name
+                const defaultServerName = config.extractedServerName || config.name || (!jsonMode ? projectName : null) || 'mcp-server';
+                const transport = config.transport || 'sse';
+                const command = `claude mcp add --transport ${transport} ${defaultServerName} ${config.url}`;
+                
+                log('📋 Generated Claude MCP command:', 'title');
+                console.log('\n' + chalk.green(command) + '\n');
+                
+                // Try to copy to clipboard
+                const clipboardTool = copyToClipboard(command);
+                if (clipboardTool) {
+                    log(`✅ Command copied to clipboard using ${clipboardTool}`, 'success');
+                    log('📌 You can now paste it in your terminal with Ctrl+V', 'info');
+                } else {
+                    log('⚠️  Could not copy to clipboard (install xclip, xsel, or pbcopy)', 'warning');
+                    log('📋 Please copy the command above manually', 'info');
+                }
+                
+                log(`🎯 Server: ${defaultServerName}`, 'info');
+                log(`🌐 URL: ${config.url}`, 'info');
+                log(`🚀 Transport: ${transport}`, 'info');
+                log('💡 To run: paste the command in your terminal', 'info');
+                process.exit(0);
             }
-            log('💡 URL-based servers are typically handled differently than command-based servers', 'info');
+            
+            // Get interactive configuration for URL servers
+            // For JSON/clipboard input, prioritize extracted name; for auto-detect, use project name
+            const defaultServerName = config.extractedServerName || config.name || (jsonMode ? 'mcp-server' : projectName) || 'mcp-server';
+            
+            if (isForce) {
+                // Force mode - use defaults
+                const success = await executeClaudeMCPAddURL(config, defaultServerName, 'user');
+                
+                if (success) {
+                    log('🎉 URL-based MCP Auto-Add completed successfully!', 'success');
+                    log(`💡 MCP server "${defaultServerName}" is now available in Claude Code`, 'info');
+                    log('🔄 Restart Claude Code if needed to see the new server', 'info');
+                } else {
+                    log('❌ URL-based MCP Auto-Add failed', 'error');
+                    process.exit(1);
+                }
+            } else {
+                // Interactive mode for URL servers
+                log('📋 URL-based MCP Configuration Summary:', 'title');
+                log(`Server Name: ${defaultServerName}`, 'info');
+                log(`URL: ${config.url}`, 'info');
+                log(`Transport: ${config.transport}`, 'info');
+                log(`Description: ${config.description}`, 'info');
+                
+                const questions = [
+                    {
+                        type: 'list',
+                        name: 'scope',
+                        message: 'Choose MCP server scope:',
+                        choices: [
+                            { name: 'user - Available to you across all projects (recommended)', value: 'user' },
+                            { name: 'local - Available only in this project', value: 'local' },
+                            { name: 'project - Shared with everyone in the project (requires .mcp.json)', value: 'project' }
+                        ],
+                        default: 'user'
+                    },
+                    {
+                        type: 'input',
+                        name: 'serverName',
+                        message: 'Server name:',
+                        default: defaultServerName,
+                        validate: (input) => {
+                            if (!input || input.trim().length === 0) {
+                                return 'Server name cannot be empty';
+                            }
+                            if (!/^[a-zA-Z0-9\-_]+$/.test(input.trim())) {
+                                return 'Server name can only contain letters, numbers, hyphens, and underscores';
+                            }
+                            return true;
+                        }
+                    },
+                    {
+                        type: 'list',
+                        name: 'transport',
+                        message: 'Choose transport type:',
+                        choices: [
+                            { name: 'SSE (Server-Sent Events) - recommended', value: 'sse' },
+                            { name: 'HTTP', value: 'http' }
+                        ],
+                        default: config.transport || 'sse'
+                    },
+                    {
+                        type: 'confirm',
+                        name: 'confirm',
+                        message: 'Add this URL-based MCP server to Claude Code?',
+                        default: true
+                    }
+                ];
+                
+                const answers = await inquirer.prompt(questions);
+                
+                if (!answers.confirm) {
+                    log('❌ Operation cancelled by user', 'warning');
+                    process.exit(0);
+                }
+                
+                // Update config with user choices
+                config.transport = answers.transport;
+                
+                // Execute Claude MCP add command for URL server
+                const success = await executeClaudeMCPAddURL(config, answers.serverName.trim(), answers.scope);
+                
+                if (success) {
+                    log('🎉 URL-based MCP Auto-Add completed successfully!', 'success');
+                    log(`💡 MCP server "${answers.serverName}" is now available in Claude Code`, 'info');
+                    log(`📍 Scope: ${answers.scope}`, 'info');
+                    log(`🌐 URL: ${config.url}`, 'info');
+                    log(`🚀 Transport: ${config.transport}`, 'info');
+                    
+                    // Provide scope-specific guidance
+                    if (answers.scope === 'user') {
+                        log('🌟 This server is available across all your projects', 'info');
+                    } else if (answers.scope === 'local') {
+                        log('📁 This server is only available in the current project', 'info');
+                    } else if (answers.scope === 'project') {
+                        log('👥 This server will be shared with everyone in the project', 'info');
+                        log('📝 Make sure to commit the .mcp.json file to your repository', 'warning');
+                    }
+                    
+                    log('🔄 Restart Claude Code if needed to see the new server', 'info');
+                    log('📋 Run "claude mcp list" to see all configured servers', 'info');
+                } else {
+                    log('❌ URL-based MCP Auto-Add failed', 'error');
+                    process.exit(1);
+                }
+            }
+            
             process.exit(0);
         }
         
         // Handle generate command mode
         if (generateCommand) {
-            const defaultServerName = config.extractedServerName || config.name || projectName || 'mcp-server';
+            // For JSON/clipboard input, prioritize extracted name; for auto-detect, use project name
+            const defaultServerName = config.extractedServerName || config.name || (jsonMode ? 'mcp-server' : projectName) || 'mcp-server';
             const defaultScope = 'user';
             
             const command = generateClaudeCommand(config, defaultServerName, defaultScope);
@@ -1144,7 +1538,7 @@ async function main() {
         }
         
         // Get interactive configuration with scope and server name
-        const interactiveConfig = await getInteractiveConfig(config);
+        const interactiveConfig = await getInteractiveConfig(config, jsonMode);
         
         if (!interactiveConfig.confirmed) {
             log('❌ Operation cancelled by user', 'warning');

@@ -10,9 +10,10 @@ This global Node.js package revolutionizes MCP development by automatically dete
 - **🎯 Multiple Input Modes**: Interactive menu, auto-detect, clipboard, JSON paste, or file input
 - **📋 Clipboard Integration**: Read JSON configurations directly from system clipboard
 - **🔧 Smart Configuration**: Generates the correct MCP configuration based on project structure
+- **🌐 Dual Server Support**: Handles both local (STDIO) and remote (URL-based) MCP servers
 - **🎯 Interactive Prompts**: Choose scope (user/local/project) and customize server name
 - **🧪 Path Validation**: Tests executable paths before adding to ensure they work
-- **🚀 One-Command Setup**: Automatically runs `claude mcp add-json` to add servers to Claude Code
+- **🚀 One-Command Setup**: Automatically runs correct `claude mcp` command for server type
 - **📦 Global Installation**: Install once, use anywhere in your environment
 - **🔨 Build Integration**: Automatically builds TypeScript projects when needed
 - **🌍 Environment Support**: Reads `.env` files and handles environment variables
@@ -114,6 +115,49 @@ mcp-auto-add --clipboard --force # Force clipboard mode
 mcp-auto-add --dry-run          # See what would be done
 mcp-auto-add . --verbose        # Detailed logging with auto-detect
 ```
+
+## 🔄 MCP Server Types
+
+The tool automatically detects and handles two types of MCP servers:
+
+### 📱 **Local Servers (STDIO-based)**
+- **Description**: Run locally on your machine
+- **Communication**: Via standard input/output streams  
+- **Command Format**: `claude mcp add-json server-name '{"command":"...","args":[...]}' -s scope`
+- **Examples**: Python scripts, TypeScript/Node.js applications, local executables
+- **Detection**: Auto-detected from project files in current directory
+
+```bash
+# Local server examples
+{"command": "python", "args": ["server.py"]}
+{"command": "npx", "args": ["-y", "@modelcontextprotocol/server-everything"]}
+{"command": "/path/to/executable", "args": ["--config", "file.json"]}
+```
+
+### 🌐 **Remote Servers (URL-based)**
+- **Description**: Run on external servers accessed via HTTP/SSE
+- **Communication**: Via HTTP requests or Server-Sent Events
+- **Command Format**: `claude mcp add --transport sse server-name https://api.example.com/mcp`
+- **Examples**: GitMCP, Linear, Sentry, GitHub integrations
+- **Detection**: Auto-detected from JSON with `"url"` field
+
+```bash
+# Remote server examples  
+{"url": "https://gitmcp.io/docs"}
+{"url": "https://mcp.linear.app/sse", "transport": "sse"}
+{"url": "https://mcp.sentry.io/sse", "transport": "sse"}
+```
+
+### 🔧 **How Detection Works**
+
+1. **JSON Input** (clipboard, --json, --json-file):
+   - **URL detected**: `{"url": "https://..."}` → Uses `claude mcp add --transport`
+   - **Command detected**: `{"command": "...", "args": [...]}` → Uses `claude mcp add-json`
+   - **Wrapped format**: `{"gitmcp": {"url": "..."}}` → Extracts server name + config
+
+2. **Auto-detection** (current directory):
+   - **Always local**: Scans project files to generate STDIO configuration
+   - **Never remote**: Cannot auto-detect remote servers from local files
 
 ## 🔍 Project Detection
 
@@ -339,6 +383,33 @@ $ mcp-auto-add --clipboard
 [2025-08-15T14:30:05.000Z] 🎉 MCP Auto-Add completed successfully!
 ```
 
+### Adding Remote (URL-based) Servers
+
+```bash
+# Copy URL-based JSON configuration to clipboard, then:
+$ mcp-auto-add --clipboard
+
+[2025-08-15T14:30:00.000Z] 🚀 MCP Auto-Add - Automatically adding MCP server to Claude Code
+[2025-08-15T14:30:00.000Z] 📋 Reading JSON configuration from clipboard...
+[2025-08-15T14:30:00.000Z] ✅ Successfully read content from clipboard
+[2025-08-15T14:30:00.000Z] 🔧 Detected JSON fragment, attempting to wrap in braces...
+[2025-08-15T14:30:00.000Z] ✅ Successfully parsed JSON fragment
+[2025-08-15T14:30:00.000Z] 📦 Detected wrapped JSON format with server name: "gitmcp"
+[2025-08-15T14:30:00.000Z] 📌 Detected URL-based MCP configuration
+[2025-08-15T14:30:00.000Z] 🌐 URL-based MCP server detected
+[2025-08-15T14:30:00.000Z] URL: https://gitmcp.io/docs
+[2025-08-15T14:30:00.000Z] Transport: sse
+
+? Choose MCP server scope: user - Available to you across all projects (recommended)
+? Server name: gitmcp
+? Choose transport type: SSE (Server-Sent Events) - recommended
+? Add this URL-based MCP server to Claude Code? Yes
+
+[2025-08-15T14:30:05.000Z] 🚀 Executing Claude MCP add command for URL-based server...
+[2025-08-15T14:30:05.000Z] ✅ URL-based MCP server added to Claude Code successfully!
+[2025-08-15T14:30:05.000Z] 🎉 URL-based MCP Auto-Add completed successfully!
+```
+
 ### Generate Commands for Later Use
 
 ```bash
@@ -349,7 +420,7 @@ $ mcp-auto-add --clipboard --generate-command
 [2025-08-15T14:30:00.000Z] ✅ Successfully read content from clipboard
 [2025-08-15T14:30:00.000Z] 📋 Generated Claude MCP command:
 
-claude mcp add-json gitmcp '{"url":"https://gitmcp.io/docs"}' -s user
+claude mcp add --transport sse gitmcp https://gitmcp.io/docs
 
 [2025-08-15T14:30:00.000Z] ✅ Command copied to clipboard using xclip
 [2025-08-15T14:30:00.000Z] 📌 You can now paste it in your terminal with Ctrl+V
@@ -384,6 +455,19 @@ claude mcp add-json gitmcp '{"url":"https://gitmcp.io/docs"}' -s user
 - The tool will prompt to continue anyway
 - Check file permissions
 - Ensure the path is correct
+
+#### "URL-based server connection failed"
+- Verify the URL is accessible in your browser
+- Check your internet connection
+- Ensure the transport type (SSE/HTTP) is correct
+- Try a different transport option
+
+#### "Invalid JSON configuration"  
+- Check JSON syntax with a validator
+- Ensure proper escaping of quotes
+- Verify the configuration format matches the server type:
+  - Local servers: `{"command": "...", "args": [...]}`
+  - Remote servers: `{"url": "https://..."}`
 
 ### Debug Mode
 
