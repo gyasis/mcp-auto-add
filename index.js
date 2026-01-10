@@ -2,7 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { execSync } = require('child_process');
+const { execSync, spawnSync } = require('child_process');
 const chalk = require('chalk');
 const inquirer = require('inquirer');
 
@@ -14,6 +14,8 @@ const isDryRun = args.includes('--dry-run') || args.includes('-d');
 const showHelp = args.includes('--help') || args.includes('-h');
 const generateCommand = args.includes('--generate-command') || args.includes('-g');
 const useClipboard = args.includes('--clipboard') || args.includes('-c');
+const editMode = args.includes('--edit') || args.includes('-e') || args[0] === 'edit';
+const useGemini = args.includes('--gemini') || args.includes('--g');
 
 // Input mode detection
 const jsonFlagIndex = args.findIndex(arg => arg === '--json' || arg === '-j');
@@ -25,11 +27,12 @@ const autoDetectMode = args.includes('.');
 // Show help and exit if requested
 if (showHelp) {
     console.log(`
-🚀 MCP Auto-Add - Automatically detect and add MCP servers to Claude Code
+🚀 MCP Auto-Add - Automatically detect and add MCP servers to Claude Code or Gemini CLI
 
 USAGE:
     mcp-auto-add [OPTIONS]              # Interactive mode with menu
     mcp-auto-add . [OPTIONS]            # Auto-detect from current folder
+    mcp-auto-add edit                   # Edit MCP servers (interactive selection)
     mcp-auto-add --clipboard [OPTIONS]  # Read JSON from clipboard
     mcp-auto-add --json '<config>' [OPTIONS]      # Direct JSON input
     mcp-auto-add --json-file <path> [OPTIONS]     # JSON from file
@@ -41,21 +44,32 @@ OPTIONS:
     -j, --json <config>          Provide JSON configuration directly
     -jf, --json-file <path>      Read JSON configuration from file
     -c, --clipboard              Read JSON configuration from clipboard
-    -g, --generate-command       Generate claude command and copy to clipboard
+    -g, --generate-command       Generate claude/gemini command and copy to clipboard
+    --gemini, --g                Use Gemini CLI instead of Claude Code
+    -e, --edit                   Edit MCP configuration file
     -h, --help                   Show this help message
 
 EXAMPLES:
     # Interactive mode - shows menu of choices (default)
     mcp-auto-add
-    
+
     # Auto-detect mode - directly tries to detect from current folder
     mcp-auto-add .
-    
+
+    # Edit mode - interactive server selection
+    mcp-auto-add edit              # List all servers, select one to edit
+    mcp-auto-add --edit            # Same as 'mcp-auto-add edit'
+
     # Clipboard mode - reads JSON config from clipboard
     mcp-auto-add --clipboard
     
     # Direct JSON input
-    mcp-auto-add --json '{"command":"npx","args":["-y","gemini-mcp-tool"]}'
+    mcp-auto-add --json '{"command":"npx","args":["-y","tool"]}'
+    
+    # Use Gemini CLI instead of Claude
+    mcp-auto-add --gemini .
+    mcp-auto-add --gemini --clipboard
+    mcp-auto-add --json '{"command":"npx","args":["-y","tool"]}' --gemini
     
     # JSON from file
     mcp-auto-add --json-file ./mcp-config.json
@@ -87,7 +101,8 @@ SCOPES:
     project     - Shared with team via .mcp.json file
 
 REQUIREMENTS:
-    - Claude Code CLI installed and in PATH
+    - Claude Code CLI installed and in PATH (or use --gemini flag)
+    - For Gemini CLI: npm install -g @google/gemini-cli
     - For Python: uv package manager and .venv environment
     - For TypeScript: Build tools (npm/yarn/pnpm/bun)
 
@@ -117,11 +132,90 @@ function logVerbose(message) {
     }
 }
 
+// ==========================================
+// SECURITY: Input Validation Functions
+// ==========================================
+
+// Validate server name - only allow safe characters
+function validateServerName(name) {
+    if (!name || typeof name !== 'string') {
+        throw new Error('Server name is required');
+    }
+    const trimmed = name.trim();
+    if (trimmed.length === 0) {
+        throw new Error('Server name cannot be empty');
+    }
+    if (!/^[a-zA-Z0-9_-]+$/.test(trimmed)) {
+        throw new Error('Server name can only contain letters, numbers, hyphens, and underscores');
+    }
+    if (trimmed.length > 64) {
+        throw new Error('Server name exceeds maximum length (64 characters)');
+    }
+    return trimmed;
+}
+
+// Validate transport type
+function validateTransport(transport) {
+    const validTransports = ['sse', 'http', 'stdio'];
+    if (transport && !validTransports.includes(transport)) {
+        throw new Error(`Invalid transport type: ${transport}. Valid types: ${validTransports.join(', ')}`);
+    }
+    return transport || 'sse';  // Default to sse for Claude
+}
+
+// Validate scope
+function validateScope(scope) {
+    const validScopes = ['user', 'local', 'project'];
+    if (scope && !validScopes.includes(scope)) {
+        throw new Error(`Invalid scope: ${scope}. Valid scopes: ${validScopes.join(', ')}`);
+    }
+    return scope || 'user';
+}
+
+// Validate URL format
+function validateURL(url) {
+    if (!url || typeof url !== 'string') {
+        throw new Error('URL is required');
+    }
+    // Must start with http:// or https://
+    if (!/^https?:\/\//i.test(url)) {
+        throw new Error('URL must start with http:// or https://');
+    }
+    try {
+        const parsed = new URL(url);
+        if (!['http:', 'https:'].includes(parsed.protocol)) {
+            throw new Error('Invalid URL protocol');
+        }
+        return url;
+    } catch (e) {
+        throw new Error('Invalid URL format');
+    }
+}
+
+// Shell-safe escaping using single quotes (prevents all shell interpretation)
+function shellEscape(arg) {
+    if (!arg || typeof arg !== 'string') return "''";
+    // Use single quotes and escape single quotes within
+    return "'" + arg.replace(/'/g, "'\"'\"'") + "'";
+}
+
+// Cross-platform executable finder
+function findExecutable(name) {
+    const isWindows = process.platform === 'win32';
+    try {
+        const cmd = isWindows ? `where ${name}` : `which ${name}`;
+        return execSync(cmd, { encoding: 'utf8' }).trim().split('\n')[0];
+    } catch (error) {
+        return null;
+    }
+}
+
 // Get current working directory
 const cwd = process.cwd();
 const projectName = path.basename(cwd);
 
-log(`🚀 MCP Auto-Add - Automatically adding MCP server to Claude Code`, 'title');
+const cliTarget = useGemini ? 'Gemini CLI' : 'Claude Code';
+log(`🚀 MCP Auto-Add - Automatically adding MCP server to ${cliTarget}`, 'title');
 log(`📁 Working directory: ${cwd}`, 'info');
 log(`📦 Project name: ${projectName}`, 'info');
 
@@ -764,27 +858,39 @@ function generateMCPConfig() {
     return config;
 }
 
-// Function to copy text to clipboard
+// Function to copy text to clipboard (SECURE: uses spawnSync with stdin, no shell interpolation)
 function copyToClipboard(text) {
+    // Try xclip first (most common on Linux)
     try {
-        // Try xclip first (most common on Linux)
-        execSync(`echo '${text.replace(/'/g, "'\\''")}' | xclip -selection clipboard`, { stdio: 'ignore' });
-        return 'xclip';
-    } catch (error) {
-        try {
-            // Try xsel as fallback
-            execSync(`echo '${text.replace(/'/g, "'\\''")}' | xsel --clipboard --input`, { stdio: 'ignore' });
-            return 'xsel';
-        } catch (error) {
-            try {
-                // Try pbcopy on macOS
-                execSync(`echo '${text.replace(/'/g, "'\\''")}' | pbcopy`, { stdio: 'ignore' });
-                return 'pbcopy';
-            } catch (error) {
-                return null;
-            }
-        }
-    }
+        const result = spawnSync('xclip', ['-selection', 'clipboard'], {
+            input: text,
+            encoding: 'utf8',
+            stdio: ['pipe', 'pipe', 'pipe']
+        });
+        if (result.status === 0) return 'xclip';
+    } catch (error) { /* continue to next method */ }
+
+    // Try xsel as fallback
+    try {
+        const result = spawnSync('xsel', ['--clipboard', '--input'], {
+            input: text,
+            encoding: 'utf8',
+            stdio: ['pipe', 'pipe', 'pipe']
+        });
+        if (result.status === 0) return 'xsel';
+    } catch (error) { /* continue to next method */ }
+
+    // Try pbcopy on macOS
+    try {
+        const result = spawnSync('pbcopy', [], {
+            input: text,
+            encoding: 'utf8',
+            stdio: ['pipe', 'pipe', 'pipe']
+        });
+        if (result.status === 0) return 'pbcopy';
+    } catch (error) { /* continue to next method */ }
+
+    return null;
 }
 
 // Function to read text from clipboard
@@ -1026,6 +1132,344 @@ async function executeClaudeMCPAdd(config, serverName, scope = 'user') {
     }
 }
 
+// ============================================================================
+// GEMINI CLI FUNCTIONS
+// ============================================================================
+
+// Function to find Gemini CLI installation
+function findGeminiCLIInstallation() {
+    logVerbose('🔍 Finding Gemini CLI installation...');
+
+    // Try to find gemini command in PATH (cross-platform)
+    const geminiPath = findExecutable('gemini');
+    if (geminiPath && fs.existsSync(geminiPath)) {
+        logVerbose(`Found Gemini CLI at: ${geminiPath}`);
+        return geminiPath;
+    } else {
+        logVerbose('Gemini CLI not found in PATH');
+    }
+    
+    // Try common installation locations (npm global installs)
+    const home = process.env.HOME || process.env.USERPROFILE || '';
+    const commonPaths = [
+        path.join(home, '.nvm', 'versions', 'node', '*', 'bin', 'gemini'),
+        path.join(home, '.npm-global', 'bin', 'gemini'),
+        path.join(home, '.local', 'bin', 'gemini'),
+        path.join(home, 'bin', 'gemini'),
+        '/usr/local/bin/gemini',
+        '/usr/bin/gemini'
+    ];
+    
+    for (const geminiPath of commonPaths) {
+        // Handle wildcards in path (for nvm node versions)
+        if (geminiPath.includes('*')) {
+            try {
+                const { globSync } = require('glob');
+                const matches = globSync(geminiPath);
+                if (matches.length > 0 && fs.existsSync(matches[0])) {
+                    logVerbose(`Found Gemini CLI at: ${matches[0]}`);
+                    return matches[0];
+                }
+            } catch (error) {
+                // glob not available, skip wildcard paths
+                logVerbose('glob module not available, skipping wildcard paths');
+            }
+        } else if (fs.existsSync(geminiPath)) {
+            logVerbose(`Found Gemini CLI at: ${geminiPath}`);
+            return geminiPath;
+        }
+    }
+    
+    logVerbose('Gemini CLI installation not found in common locations');
+    return '';
+}
+
+// Function to detect Gemini MCP config file location based on scope
+function findGeminiMCPConfigPath(scope = 'user') {
+    logVerbose(`🔍 Finding Gemini MCP config file for scope: ${scope}...`);
+    
+    const home = process.env.HOME || process.env.USERPROFILE || '';
+    
+    if (scope === 'user') {
+        // User scope: ~/.gemini/settings.json or ~/.config/gemini/settings.json
+        const userPaths = [
+            path.join(home, '.gemini', 'settings.json'),
+            path.join(home, '.config', 'gemini', 'settings.json')
+        ];
+        
+        for (const configPath of userPaths) {
+            if (fs.existsSync(path.dirname(configPath)) || fs.existsSync(path.dirname(path.dirname(configPath)))) {
+                logVerbose(`Gemini user MCP config will be at: ${configPath}`);
+                return configPath;
+            }
+        }
+        
+        // Default to .gemini if neither exists
+        const defaultPath = path.join(home, '.gemini', 'settings.json');
+        logVerbose(`Gemini user MCP config will be created at: ${defaultPath}`);
+        return defaultPath;
+    } else if (scope === 'project') {
+        // Project scope: .gemini/settings.json in project root
+        const projectPath = path.join(cwd, '.gemini', 'settings.json');
+        logVerbose(`Gemini project MCP config will be at: ${projectPath}`);
+        return projectPath;
+    }
+    
+    // Default to user scope
+    return path.join(home, '.gemini', 'settings.json');
+}
+
+// Function to generate Gemini MCP add command for local servers (for display purposes)
+// SECURITY: This is only for display/logging. Actual execution uses spawnSync with arrays.
+function generateGeminiMCPCommand(config, serverName, scope = 'user') {
+    // Validate inputs first
+    const validatedName = validateServerName(serverName);
+    const validatedScope = validateScope(scope);
+
+    // Gemini CLI uses: gemini mcp add <server-name> <command> [args...]
+    // For local servers with args, we need to construct the command properly
+    let command = `gemini mcp add`;
+
+    // Add scope flag if not user (default)
+    if (validatedScope !== 'user') {
+        command += ` --scope ${validatedScope}`;
+    }
+
+    // Add server name (shell-escaped for display)
+    command += ` ${shellEscape(validatedName)}`;
+
+    // Add command and args (shell-escaped for display)
+    command += ` ${shellEscape(config.command)}`;
+    if (config.args && config.args.length > 0) {
+        command += ` ${config.args.map(arg => shellEscape(arg)).join(' ')}`;
+    }
+
+    return command;
+}
+
+// Build argument array for spawnSync (SECURE: no shell interpretation)
+function buildGeminiMCPAddArgs(config, serverName, scope = 'user') {
+    const validatedName = validateServerName(serverName);
+    const validatedScope = validateScope(scope);
+
+    const args = ['mcp', 'add'];
+
+    if (validatedScope !== 'user') {
+        args.push('--scope', validatedScope);
+    }
+
+    args.push(validatedName);
+    args.push(config.command);
+
+    if (config.args && config.args.length > 0) {
+        args.push(...config.args);
+    }
+
+    return args;
+}
+
+// Function to execute gemini mcp add command for URL-based servers
+// SECURITY: Uses spawnSync with arrays to prevent command injection
+async function executeGeminiMCPAddURL(config, serverName, scope = 'user') {
+    log('🚀 Executing Gemini MCP add command for URL-based server...', 'info');
+
+    // SECURITY: Validate all inputs FIRST
+    let validatedName, validatedScope, validatedTransport, validatedURL;
+    try {
+        validatedName = validateServerName(serverName);
+        validatedScope = validateScope(scope);
+        validatedTransport = validateTransport(config.transport || 'http');
+        validatedURL = validateURL(config.url);
+    } catch (validationError) {
+        log(`❌ Validation failed: ${validationError.message}`, 'error');
+        return false;
+    }
+
+    // Build command display string for logging (shell-escaped)
+    const displayCommand = `gemini mcp add --transport ${validatedTransport}${validatedScope !== 'user' ? ` --scope ${validatedScope}` : ''} ${shellEscape(validatedName)} ${shellEscape(validatedURL)}`;
+    logVerbose(`Full command: ${displayCommand}`);
+
+    if (isDryRun) {
+        log('🔍 DRY RUN - Command would be executed:', 'warning');
+        log(displayCommand, 'info');
+        log('🔍 URL Configuration:', 'info');
+        log(`  Server Name: ${validatedName}`, 'info');
+        log(`  URL: ${validatedURL}`, 'info');
+        log(`  Transport: ${validatedTransport}`, 'info');
+        log(`  Scope: ${validatedScope}`, 'info');
+        return true;
+    }
+
+    // Check if gemini command is available
+    log('🔍 Checking Gemini CLI availability...', 'info');
+    const geminiPath = findGeminiCLIInstallation();
+    if (geminiPath) {
+        logVerbose(`✅ Gemini CLI found at: ${geminiPath}`);
+    } else {
+        // Try direct execution to verify
+        const versionCheck = spawnSync('gemini', ['--version'], { encoding: 'utf8', stdio: 'pipe' });
+        if (versionCheck.status !== 0) {
+            log('❌ Gemini CLI is not installed or not in PATH', 'error');
+            log('Install with: npm install -g @google/gemini-cli', 'info');
+            return false;
+        }
+        logVerbose('✅ Gemini CLI is available in PATH');
+    }
+
+    // Detect and log MCP config file location
+    const configPath = findGeminiMCPConfigPath(validatedScope);
+    logVerbose(`📝 Gemini MCP config will be written to: ${configPath}`);
+
+    // Build argument array (SECURE: no shell interpretation)
+    const args = ['mcp', 'add', '--transport', validatedTransport];
+    if (validatedScope !== 'user') {
+        args.push('--scope', validatedScope);
+    }
+    args.push(validatedName, validatedURL);
+
+    log(`📤 Adding URL-based MCP server "${validatedName}" to Gemini CLI with ${validatedTransport.toUpperCase()} transport...`, 'info');
+
+    // Execute using spawnSync (SECURE: shell: false is default)
+    const result = spawnSync('gemini', args, {
+        encoding: 'utf8',
+        stdio: ['pipe', 'pipe', 'pipe']
+    });
+
+    if (result.status === 0) {
+        log(`✅ URL-based MCP server added to Gemini CLI successfully!`, 'success');
+        if (result.stdout && result.stdout.trim()) {
+            logVerbose(`Gemini output: ${result.stdout.trim()}`);
+        }
+        return true;
+    } else {
+        log('❌ Failed to add URL-based MCP server to Gemini CLI', 'error');
+
+        if (result.status !== null) {
+            log(`Exit code: ${result.status}`, 'error');
+        }
+        if (result.stderr && result.stderr.trim()) {
+            log(`STDERR: ${result.stderr.trim()}`, 'error');
+        }
+        if (result.stdout && result.stdout.trim()) {
+            log(`STDOUT: ${result.stdout.trim()}`, 'error');
+        }
+
+        log('💡 This might be due to:', 'warning');
+        log('  - Invalid URL format', 'warning');
+        log('  - Server name already exists', 'warning');
+        log('  - Network connectivity issues', 'warning');
+        log('  - Invalid transport type', 'warning');
+
+        log('🔧 Try these troubleshooting steps:', 'info');
+        log('  1. Verify the URL is accessible', 'info');
+        log('  2. Try a different server name', 'info');
+        log('  3. Check your internet connection', 'info');
+        log('  4. Run "gemini mcp list" to see existing servers', 'info');
+
+        return false;
+    }
+}
+
+// Function to execute gemini mcp add command for local servers
+// SECURITY: Uses spawnSync with arrays to prevent command injection
+async function executeGeminiMCPAdd(config, serverName, scope = 'user') {
+    log('🚀 Executing Gemini MCP add command...', 'info');
+
+    // SECURITY: Validate inputs and build args (validation happens in buildGeminiMCPAddArgs)
+    let args;
+    try {
+        args = buildGeminiMCPAddArgs(config, serverName, scope);
+    } catch (validationError) {
+        log(`❌ Validation failed: ${validationError.message}`, 'error');
+        return false;
+    }
+
+    // Get display command for logging (shell-escaped)
+    const displayCommand = generateGeminiMCPCommand(config, serverName, scope);
+    logVerbose(`Full command: ${displayCommand}`);
+
+    // Get validated values for display
+    const validatedName = validateServerName(serverName);
+    const validatedScope = validateScope(scope);
+
+    if (isDryRun) {
+        log('🔍 DRY RUN - Command would be executed:', 'warning');
+        log(displayCommand, 'info');
+        log('🔍 Configuration:', 'info');
+        log(`  Server Name: ${validatedName}`, 'info');
+        log(`  Command: ${config.command}`, 'info');
+        log(`  Args: ${config.args ? config.args.join(' ') : 'none'}`, 'info');
+        log(`  Scope: ${validatedScope}`, 'info');
+        return true;
+    }
+
+    // Check if gemini command is available
+    log('🔍 Checking Gemini CLI availability...', 'info');
+    const geminiPath = findGeminiCLIInstallation();
+    if (geminiPath) {
+        logVerbose(`✅ Gemini CLI found at: ${geminiPath}`);
+    } else {
+        // Try direct execution to verify
+        const versionCheck = spawnSync('gemini', ['--version'], { encoding: 'utf8', stdio: 'pipe' });
+        if (versionCheck.status !== 0) {
+            log('❌ Gemini CLI is not installed or not in PATH', 'error');
+            log('Install with: npm install -g @google/gemini-cli', 'info');
+            return false;
+        }
+        logVerbose('✅ Gemini CLI is available in PATH');
+    }
+
+    // Detect and log MCP config file location
+    const configPath = findGeminiMCPConfigPath(validatedScope);
+    logVerbose(`📝 Gemini MCP config will be written to: ${configPath}`);
+
+    log(`📤 Adding MCP server "${validatedName}" to Gemini CLI...`, 'info');
+
+    // Execute using spawnSync (SECURE: shell: false is default)
+    const result = spawnSync('gemini', args, {
+        encoding: 'utf8',
+        stdio: ['pipe', 'pipe', 'pipe']
+    });
+
+    if (result.status === 0) {
+        log(`✅ MCP server added to Gemini CLI successfully!`, 'success');
+        if (result.stdout && result.stdout.trim()) {
+            logVerbose(`Gemini output: ${result.stdout.trim()}`);
+        }
+        return true;
+    } else {
+        log('❌ Failed to add MCP server to Gemini CLI', 'error');
+
+        if (result.status !== null) {
+            log(`Exit code: ${result.status}`, 'error');
+        }
+        if (result.stderr && result.stderr.trim()) {
+            log(`STDERR: ${result.stderr.trim()}`, 'error');
+        }
+        if (result.stdout && result.stdout.trim()) {
+            log(`STDOUT: ${result.stdout.trim()}`, 'error');
+        }
+
+        log('💡 This might be due to:', 'warning');
+        log('  - Invalid command configuration', 'warning');
+        log('  - Server name already exists', 'warning');
+        log('  - Insufficient permissions', 'warning');
+        log('  - Invalid scope specified', 'warning');
+
+        log('🔧 Try these troubleshooting steps:', 'info');
+        log('  1. Run with --verbose to see the full command', 'info');
+        log('  2. Try a different server name', 'info');
+        log('  3. Check your Gemini CLI installation', 'info');
+        log('  4. Run "gemini mcp list" to see existing servers', 'info');
+
+        return false;
+    }
+}
+
+// ============================================================================
+// END GEMINI CLI FUNCTIONS
+// ============================================================================
+
 // Function to test executable path
 async function testExecutablePath(command) {
     logVerbose(`🧪 Testing executable path: ${command}`);
@@ -1179,12 +1623,249 @@ async function getInteractiveConfig(config, jsonMode = false) {
     };
 }
 
+// Function to find all available MCP config files
+function findAllMCPConfigs() {
+    logVerbose('🔍 Finding all MCP config files...');
+
+    const home = process.env.HOME || process.env.USERPROFILE || '';
+    const configs = [];
+
+    // User scope configs
+    const userPaths = [
+        { path: path.join(home, '.cursor', 'mcp.json'), scope: 'user', label: 'Cursor (user)' },
+        { path: path.join(home, '.claude', 'mcp.json'), scope: 'user', label: 'Claude (user)' }
+    ];
+
+    // Local scope configs
+    const localPaths = [
+        { path: path.join(cwd, '.cursor', 'mcp.json'), scope: 'local', label: 'Cursor (local)' },
+        { path: path.join(cwd, '.vscode', 'mcp.json'), scope: 'local', label: 'VS Code (local)' }
+    ];
+
+    // Project scope config
+    const projectPath = { path: path.join(cwd, '.mcp.json'), scope: 'project', label: 'Project (.mcp.json)' };
+
+    // Check which files exist
+    for (const config of [...userPaths, ...localPaths, projectPath]) {
+        if (fs.existsSync(config.path)) {
+            logVerbose(`Found config: ${config.path}`);
+            configs.push(config);
+        }
+    }
+
+    return configs;
+}
+
+// Function to list servers in a config file with line numbers
+function listServersInConfig(configPath) {
+    try {
+        const content = fs.readFileSync(configPath, 'utf8');
+        const config = JSON.parse(content);
+        const lines = content.split('\n');
+        const servers = [];
+
+        if (config.mcpServers) {
+            const serverNames = Object.keys(config.mcpServers);
+
+            // Find line number for each server
+            serverNames.forEach(serverName => {
+                for (let i = 0; i < lines.length; i++) {
+                    // Look for the server name as a JSON key (e.g., "server-name": {)
+                    if (lines[i].includes(`"${serverName}"`) && lines[i].includes(':')) {
+                        servers.push({
+                            name: serverName,
+                            line: i + 1, // Line numbers are 1-based
+                            config: config.mcpServers[serverName]
+                        });
+                        break;
+                    }
+                }
+            });
+        }
+
+        return servers;
+    } catch (error) {
+        logVerbose(`Error reading config ${configPath}: ${error.message}`);
+        return [];
+    }
+}
+
+// Function to get preferred editor
+function getEditor() {
+    // Check EDITOR environment variable
+    if (process.env.EDITOR) {
+        logVerbose(`Using EDITOR from environment: ${process.env.EDITOR}`);
+        return process.env.EDITOR;
+    }
+
+    // Check for common editors
+    const editors = ['nano', 'vim', 'vi', 'code', 'emacs'];
+
+    for (const editor of editors) {
+        try {
+            execSync(`which ${editor}`, { stdio: 'ignore' });
+            logVerbose(`Found available editor: ${editor}`);
+            return editor;
+        } catch (error) {
+            // Editor not found, continue
+        }
+    }
+
+    // Fallback to nano
+    return 'nano';
+}
+
+// Function to open editor at specific line
+function openEditorAtLine(editor, filePath, lineNumber) {
+    logVerbose(`Opening ${editor} at line ${lineNumber} in ${filePath}`);
+
+    // Different editors have different syntax for jumping to a line
+    let command;
+
+    if (editor.includes('nano')) {
+        command = `${editor} +${lineNumber} "${filePath}"`;
+    } else if (editor.includes('vim') || editor.includes('vi') || editor.includes('nvim')) {
+        command = `${editor} +${lineNumber} "${filePath}"`;
+    } else if (editor.includes('code') || editor.includes('vscode')) {
+        command = `${editor} -g "${filePath}:${lineNumber}"`;
+    } else if (editor.includes('emacs')) {
+        command = `${editor} +${lineNumber} "${filePath}"`;
+    } else if (editor.includes('subl') || editor.includes('sublime')) {
+        command = `${editor} "${filePath}:${lineNumber}"`;
+    } else {
+        // Fallback - just open the file
+        log(`⚠️  Line jump not supported for ${editor}, opening at beginning`, 'warning');
+        command = `${editor} "${filePath}"`;
+    }
+
+    return command;
+}
+
+// Function to handle edit mode
+async function handleEditMode() {
+    log('📝 MCP Configuration Editor', 'title');
+
+    // Find all available config files
+    const availableConfigs = findAllMCPConfigs();
+
+    if (availableConfigs.length === 0) {
+        log('❌ No MCP configuration files found', 'error');
+        log('💡 MCP config files are typically created when you add your first MCP server', 'info');
+        log('💡 Run "mcp-auto-add" to add a server first', 'info');
+        process.exit(1);
+    }
+
+    log(`📁 Found ${availableConfigs.length} MCP configuration file(s)`, 'info');
+
+    let selectedConfig;
+
+    if (availableConfigs.length === 1) {
+        selectedConfig = availableConfigs[0];
+        log(`📂 Using: ${selectedConfig.label}`, 'info');
+    } else {
+        // Let user choose which config to edit
+        const choices = availableConfigs.map(config => {
+            const servers = listServersInConfig(config.path);
+            const serverCount = servers.length;
+            return {
+                name: `${config.label} (${serverCount} server${serverCount !== 1 ? 's' : ''})`,
+                value: config,
+                short: config.label
+            };
+        });
+
+        const { config } = await inquirer.prompt([
+            {
+                type: 'list',
+                name: 'config',
+                message: 'Which MCP configuration file?',
+                choices: choices
+            }
+        ]);
+
+        selectedConfig = config;
+    }
+
+    // List servers in the selected config
+    const servers = listServersInConfig(selectedConfig.path);
+
+    if (servers.length === 0) {
+        log('ℹ️  No servers configured yet in this file', 'info');
+        log('📝 Opening file for editing...', 'info');
+
+        const editor = getEditor();
+        try {
+            execSync(`${editor} "${selectedConfig.path}"`, { stdio: 'inherit' });
+            log('✅ Editor closed', 'success');
+            const restartMsg = useGemini ? 'Restart Gemini CLI' : 'Restart Claude Code';
+            log(`🔄 ${restartMsg} to apply changes`, 'info');
+        } catch (error) {
+            log(`❌ Failed to open editor: ${error.message}`, 'error');
+            process.exit(1);
+        }
+        return;
+    }
+
+    // Show server selection menu
+    log(`\n🔧 Found ${servers.length} MCP server${servers.length !== 1 ? 's' : ''}:`, 'info');
+
+    const serverChoices = servers.map(server => {
+        const command = server.config.command || server.config.url || 'No command';
+        const shortCommand = command.length > 50 ? command.substring(0, 47) + '...' : command;
+
+        return {
+            name: `${chalk.cyan(server.name)} - ${shortCommand}`,
+            value: server,
+            short: server.name
+        };
+    });
+
+    const { selectedServer } = await inquirer.prompt([
+        {
+            type: 'list',
+            name: 'selectedServer',
+            message: 'Which server would you like to edit?',
+            choices: serverChoices,
+            pageSize: 15
+        }
+    ]);
+
+    // Get editor
+    const editor = getEditor();
+
+    log(`\n📝 Opening ${chalk.cyan(selectedServer.name)} configuration...`, 'info');
+    log(`📍 File: ${selectedConfig.path}`, 'info');
+    log(`📄 Line: ${selectedServer.line}`, 'info');
+    log(`✏️  Editor: ${editor}`, 'info');
+
+    try {
+        // Open the config file at the specific line
+        const command = openEditorAtLine(editor, selectedConfig.path, selectedServer.line);
+        execSync(command, { stdio: 'inherit' });
+
+        log('\n✅ Editor closed', 'success');
+        log('💡 Changes are saved when you exit the editor', 'info');
+        log('🔄 Restart Claude Code to apply changes', 'info');
+    } catch (error) {
+        log(`❌ Failed to open editor: ${error.message}`, 'error');
+        log(`💡 Try setting EDITOR environment variable`, 'info');
+        log(`   Example: export EDITOR=nano`, 'info');
+        process.exit(1);
+    }
+}
+
 // Main function
 async function main() {
     try {
+        // Handle edit mode
+        if (editMode) {
+            await handleEditMode();
+            process.exit(0);
+        }
+
         let config;
         let jsonMode = false;
-        
+
         // Check for clipboard mode first
         if (useClipboard) {
             log('📋 Reading JSON configuration from clipboard...', 'info');
@@ -1377,10 +2058,13 @@ async function main() {
             if (generateCommand) {
                 // For JSON/clipboard input, prioritize extracted name; for auto-detect, use project name
                 const defaultServerName = config.extractedServerName || config.name || (!jsonMode ? projectName : null) || 'mcp-server';
-                const transport = config.transport || 'sse';
-                const command = `claude mcp add --transport ${transport} ${defaultServerName} ${config.url}`;
+                const transport = config.transport || (useGemini ? 'http' : 'sse');
+                const cliName = useGemini ? 'Gemini' : 'Claude';
+                const command = useGemini 
+                    ? `gemini mcp add --transport ${transport} ${defaultServerName} ${config.url}`
+                    : `claude mcp add --transport ${transport} ${defaultServerName} ${config.url}`;
                 
-                log('📋 Generated Claude MCP command:', 'title');
+                log(`📋 Generated ${cliName} MCP command:`, 'title');
                 console.log('\n' + chalk.green(command) + '\n');
                 
                 // Try to copy to clipboard
@@ -1406,12 +2090,15 @@ async function main() {
             
             if (isForce) {
                 // Force mode - use defaults
-                const success = await executeClaudeMCPAddURL(config, defaultServerName, 'user');
+                const executeFn = useGemini ? executeGeminiMCPAddURL : executeClaudeMCPAddURL;
+                const cliName = useGemini ? 'Gemini CLI' : 'Claude Code';
+                const success = await executeFn(config, defaultServerName, 'user');
                 
                 if (success) {
                     log('🎉 URL-based MCP Auto-Add completed successfully!', 'success');
-                    log(`💡 MCP server "${defaultServerName}" is now available in Claude Code`, 'info');
-                    log('🔄 Restart Claude Code if needed to see the new server', 'info');
+                    log(`💡 MCP server "${defaultServerName}" is now available in ${cliName}`, 'info');
+                    const restartMsg = useGemini ? 'Restart Gemini CLI' : 'Restart Claude Code';
+                    log(`🔄 ${restartMsg} if needed to see the new server`, 'info');
                 } else {
                     log('❌ URL-based MCP Auto-Add failed', 'error');
                     process.exit(1);
@@ -1479,12 +2166,14 @@ async function main() {
                 // Update config with user choices
                 config.transport = answers.transport;
                 
-                // Execute Claude MCP add command for URL server
-                const success = await executeClaudeMCPAddURL(config, answers.serverName.trim(), answers.scope);
+                // Execute MCP add command for URL server
+                const executeFn = useGemini ? executeGeminiMCPAddURL : executeClaudeMCPAddURL;
+                const cliName = useGemini ? 'Gemini CLI' : 'Claude Code';
+                const success = await executeFn(config, answers.serverName.trim(), answers.scope);
                 
                 if (success) {
                     log('🎉 URL-based MCP Auto-Add completed successfully!', 'success');
-                    log(`💡 MCP server "${answers.serverName}" is now available in Claude Code`, 'info');
+                    log(`💡 MCP server "${answers.serverName}" is now available in ${cliName}`, 'info');
                     log(`📍 Scope: ${answers.scope}`, 'info');
                     log(`🌐 URL: ${config.url}`, 'info');
                     log(`🚀 Transport: ${config.transport}`, 'info');
@@ -1499,7 +2188,8 @@ async function main() {
                         log('📝 Make sure to commit the .mcp.json file to your repository', 'warning');
                     }
                     
-                    log('🔄 Restart Claude Code if needed to see the new server', 'info');
+                    const restartMsg = useGemini ? 'Restart Gemini CLI' : 'Restart Claude Code';
+                    log(`🔄 ${restartMsg} if needed to see the new server`, 'info');
                     log('📋 Run "claude mcp list" to see all configured servers', 'info');
                 } else {
                     log('❌ URL-based MCP Auto-Add failed', 'error');
@@ -1516,9 +2206,12 @@ async function main() {
             const defaultServerName = config.extractedServerName || config.name || (jsonMode ? 'mcp-server' : projectName) || 'mcp-server';
             const defaultScope = 'user';
             
-            const command = generateClaudeCommand(config, defaultServerName, defaultScope);
+            const command = useGemini 
+                ? generateGeminiMCPCommand(config, defaultServerName, defaultScope)
+                : generateClaudeCommand(config, defaultServerName, defaultScope);
+            const cliName = useGemini ? 'Gemini' : 'Claude';
             
-            log('📋 Generated Claude MCP command:', 'title');
+            log(`📋 Generated ${cliName} MCP command:`, 'title');
             console.log('\n' + chalk.green(command) + '\n');
             
             // Try to copy to clipboard
@@ -1545,8 +2238,10 @@ async function main() {
             process.exit(0);
         }
         
-        // Execute Claude MCP add command with chosen settings
-        const success = await executeClaudeMCPAdd(
+        // Execute MCP add command with chosen settings
+        const executeFn = useGemini ? executeGeminiMCPAdd : executeClaudeMCPAdd;
+        const cliName = useGemini ? 'Gemini CLI' : 'Claude Code';
+        const success = await executeFn(
             interactiveConfig, 
             interactiveConfig.serverName, 
             interactiveConfig.scope
@@ -1554,7 +2249,7 @@ async function main() {
         
         if (success) {
             log('🎉 MCP Auto-Add completed successfully!', 'success');
-            log(`💡 MCP server "${interactiveConfig.serverName}" is now available in Claude Code`, 'info');
+            log(`💡 MCP server "${interactiveConfig.serverName}" is now available in ${cliName}`, 'info');
             log(`📍 Scope: ${interactiveConfig.scope}`, 'info');
             
             // Provide scope-specific guidance
@@ -1567,8 +2262,10 @@ async function main() {
                 log('📝 Make sure to commit the .mcp.json file to your repository', 'warning');
             }
             
-            log('🔄 Restart Claude Code if needed to see the new server', 'info');
-            log('📋 Run "claude mcp list" to see all configured servers', 'info');
+            const restartMsg = useGemini ? 'Restart Gemini CLI' : 'Restart Claude Code';
+            const listCmd = useGemini ? 'gemini mcp list' : 'claude mcp list';
+            log(`🔄 ${restartMsg} if needed to see the new server`, 'info');
+            log(`📋 Run "${listCmd}" to see all configured servers`, 'info');
         } else {
             log('❌ MCP Auto-Add failed', 'error');
             process.exit(1);
