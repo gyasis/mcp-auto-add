@@ -1,8 +1,8 @@
 # MCP Auto-Add 🚀
 
-**Automatically detect MCP projects and add them to Claude Code with one command!**
+**Automatically detect MCP projects and add them to Claude Code or Gemini CLI with one command!**
 
-This global Node.js package revolutionizes MCP development by automatically detecting your project type, generating the correct configuration, and adding it to Claude Code with a single command.
+This global Node.js package revolutionizes MCP development by automatically detecting your project type, generating the correct configuration, and adding it to **Claude Code** or **Gemini CLI** with a single command.
 
 ## ✨ Features
 
@@ -11,15 +11,16 @@ This global Node.js package revolutionizes MCP development by automatically dete
 - **📋 Clipboard Integration**: Read JSON configurations directly from system clipboard
 - **🔧 Smart Configuration**: Generates the correct MCP configuration based on project structure
 - **🌐 Dual Server Support**: Handles both local (STDIO) and remote (URL-based) MCP servers
+- **🤖 Dual Platform Support**: Works with both **Claude Code** and **Gemini CLI**
 - **🎯 Interactive Prompts**: Choose scope (user/local/project) and customize server name
 - **🧪 Path Validation**: Tests executable paths before adding to ensure they work
-- **🚀 One-Command Setup**: Automatically runs correct `claude mcp` command for server type
+- **🚀 One-Command Setup**: Automatically runs correct CLI command for server type
 - **📦 Global Installation**: Install once, use anywhere in your environment
 - **🔨 Build Integration**: Automatically builds TypeScript projects when needed
 - **🌍 Environment Support**: Reads `.env` files and handles environment variables
-- **📤 Command Generation**: Generate ready-to-paste `claude mcp add-json` commands
+- **📤 Command Generation**: Generate ready-to-paste CLI commands
 - **🎨 Beautiful Output**: Colored, timestamped logging with progress indicators
-- **🛡️ Production Ready**: Comprehensive error handling with actionable guidance
+- **🛡️ Security Hardened**: Input validation and command injection protection
 
 ## 🚀 Quick Start
 
@@ -37,18 +38,18 @@ npm install -g .
 
 ### Basic Usage
 
-The tool supports three main usage patterns:
+The tool supports multiple usage patterns for both **Claude Code** (default) and **Gemini CLI**:
 
 ```bash
-# 1. Interactive mode (default) - Shows menu with choices
-mcp-auto-add
+# Claude Code (default)
+mcp-auto-add                    # Interactive mode
+mcp-auto-add .                  # Auto-detect from current folder
+mcp-auto-add --clipboard        # Read JSON config from clipboard
 
-# 2. Auto-detect mode - Directly detects from current folder
-cd /path/to/your/mcp-project
-mcp-auto-add .
-
-# 3. Clipboard mode - Reads JSON config from clipboard
-mcp-auto-add --clipboard
+# Gemini CLI (use --gemini flag)
+mcp-auto-add --gemini           # Interactive mode for Gemini
+mcp-auto-add . --gemini         # Auto-detect for Gemini
+mcp-auto-add --clipboard --gemini  # Clipboard mode for Gemini
 ```
 
 **Interactive Mode** will:
@@ -70,7 +71,7 @@ mcp-auto-add --clipboard
 
 ```bash
 mcp-auto-add [OPTIONS]              # Interactive mode with menu
-mcp-auto-add . [OPTIONS]            # Auto-detect from current folder  
+mcp-auto-add . [OPTIONS]            # Auto-detect from current folder
 mcp-auto-add --clipboard [OPTIONS]  # Read JSON from clipboard
 
 Options:
@@ -80,13 +81,17 @@ Options:
   -j, --json <config>          Provide JSON configuration directly
   -jf, --json-file <path>      Read JSON configuration from file
   -c, --clipboard              Read JSON configuration from clipboard
-  -g, --generate-command       Generate claude command and copy to clipboard
+  -g, --generate-command       Generate CLI command and copy to clipboard
+  --gemini                     Use Gemini CLI instead of Claude Code
+  -e, --edit                   Edit existing MCP configuration files
   -h, --help                   Show help information
 ```
 
 ### Examples
 
 ```bash
+# === CLAUDE CODE (Default) ===
+
 # Interactive mode - shows menu of choices (recommended)
 mcp-auto-add
 
@@ -97,23 +102,42 @@ mcp-auto-add .
 mcp-auto-add --clipboard
 
 # Direct JSON input
-mcp-auto-add --json '{"command":"npx","args":["-y","gemini-mcp-tool"]}'
+mcp-auto-add --json '{"command":"npx","args":["-y","@modelcontextprotocol/server-filesystem","/path"]}'
 
 # JSON from file
 mcp-auto-add --json-file ./mcp-config.json
 
 # Generate command for clipboard (no execution)
 mcp-auto-add --json '{"command":"npx","args":["-y","tool"]}' --generate-command
-mcp-auto-add --clipboard --generate-command
 
-# Force mode options
+# === GEMINI CLI ===
+
+# Interactive mode for Gemini CLI
+mcp-auto-add --gemini
+
+# Auto-detect and add to Gemini CLI
+mcp-auto-add . --gemini
+
+# Clipboard mode for Gemini CLI
+mcp-auto-add --clipboard --gemini
+
+# Direct JSON input for Gemini
+mcp-auto-add --json '{"command":"npx","args":["-y","tool"]}' --gemini
+
+# URL-based server for Gemini
+mcp-auto-add --json '{"url":"https://api.example.com/mcp"}' --gemini
+
+# === COMMON OPTIONS ===
+
+# Force mode options (works with both platforms)
 mcp-auto-add --force            # Interactive with defaults
 mcp-auto-add . --force          # Force auto-detect mode
-mcp-auto-add --clipboard --force # Force clipboard mode
+mcp-auto-add --clipboard --force --gemini # Force Gemini clipboard mode
 
 # Testing and debugging
 mcp-auto-add --dry-run          # See what would be done
-mcp-auto-add . --verbose        # Detailed logging with auto-detect
+mcp-auto-add . --verbose        # Detailed logging
+mcp-auto-add . --gemini --dry-run # Test Gemini mode
 ```
 
 ## 🔄 MCP Server Types
@@ -441,6 +465,11 @@ claude mcp add --transport sse gitmcp https://gitmcp.io/docs
 - Ensure `claude` command is in your PATH
 - Try running `claude --version` to verify
 
+#### "Gemini CLI is not installed"
+- Install Gemini CLI: `npm install -g @google/gemini-cli`
+- Ensure `gemini` command is in your PATH
+- Try running `gemini --version` to verify
+
 #### "TypeScript build failed"
 - Fix build errors in your TypeScript project
 - Ensure all dependencies are installed
@@ -535,6 +564,275 @@ mcp-auto-add --force --dry-run  # Test first
 mcp-auto-add --force             # Actually add
 ```
 
+## 🔄 Claude Code vs Gemini CLI Comparison
+
+This tool supports both **Claude Code** and **Gemini CLI** for MCP server management. Here's a detailed comparison:
+
+### Command Format Differences
+
+| Feature | Claude Code | Gemini CLI |
+|---------|-------------|------------|
+| **Add Local Server** | `claude mcp add-json <name> '<json>' -s <scope>` | `gemini mcp add --scope <scope> <name> <command> <args...>` |
+| **Add Remote Server** | `claude mcp add --transport sse <name> <url>` | `gemini mcp add --transport http <name> <url>` |
+| **List Servers** | `claude mcp list` | `gemini mcp list` |
+| **Remove Server** | `claude mcp remove <name>` | `gemini mcp remove <name>` |
+| **Default Transport** | `sse` (Server-Sent Events) | `http` (Streamable HTTP) |
+| **Scope Flag** | `-s` or `--scope` | `--scope` (no short form) |
+
+### Configuration File Locations
+
+| Scope | Claude Code | Gemini CLI |
+|-------|-------------|------------|
+| **User** | `~/.claude.json` or `~/.claude/settings.json` | `~/.gemini/settings.json` |
+| **Local** | `.claude/settings.local.json` | N/A |
+| **Project** | `.mcp.json` (shared) | `.gemini/settings.json` (project root) |
+
+### Transport Types
+
+| Transport | Claude Code | Gemini CLI | Description |
+|-----------|-------------|------------|-------------|
+| **stdio** | Default for local | Default for local | Standard input/output streams |
+| **sse** | Default for remote | Supported | Server-Sent Events |
+| **http** | Supported | Default for remote | Streamable HTTP |
+
+### Scope Behavior
+
+**Claude Code Scopes:**
+- `user` - Available across all projects (recommended)
+- `local` - Available only in current project (private)
+- `project` - Shared with team via `.mcp.json` file
+
+**Gemini CLI Scopes:**
+- `user` - Available across all projects (default)
+- `project` - Available only in current project
+
+### Example Commands
+
+```bash
+# === Adding a local MCP server ===
+
+# Claude Code
+claude mcp add-json my-server '{"command":"npx","args":["-y","@example/server"]}' -s user
+
+# Gemini CLI
+gemini mcp add --scope user my-server npx -y @example/server
+
+# === Adding a remote MCP server ===
+
+# Claude Code (uses SSE by default)
+claude mcp add --transport sse github-mcp https://api.github.com/mcp
+
+# Gemini CLI (uses HTTP by default)
+gemini mcp add --transport http github-mcp https://api.github.com/mcp
+```
+
+## 📝 Manual Configuration Guide
+
+If you prefer to configure MCP servers manually without CLI commands, you can edit configuration files directly.
+
+### Claude Code Configuration
+
+**User-level configuration** (`~/.claude.json` or `~/.claude/settings.json`):
+
+```json
+{
+  "mcpServers": {
+    "my-local-server": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/dir"],
+      "env": {
+        "API_KEY": "your-api-key"
+      }
+    },
+    "my-remote-server": {
+      "url": "https://api.example.com/mcp",
+      "transport": "sse"
+    }
+  }
+}
+```
+
+**Project-level configuration** (`.mcp.json` in project root):
+
+```json
+{
+  "mcpServers": {
+    "project-server": {
+      "command": "python",
+      "args": ["./server.py"],
+      "env": {
+        "DEBUG": "true"
+      }
+    }
+  }
+}
+```
+
+### Gemini CLI Configuration
+
+**User-level configuration** (`~/.gemini/settings.json`):
+
+```json
+{
+  "mcpServers": {
+    "my-server": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-everything"],
+      "env": {
+        "ENV_VAR": "value"
+      }
+    }
+  }
+}
+```
+
+### Configuration Schema
+
+```json
+{
+  "mcpServers": {
+    "<server-name>": {
+      "command": "string (required for local servers)",
+      "args": ["array", "of", "strings"],
+      "env": {
+        "KEY": "value"
+      },
+      "url": "string (required for remote servers)",
+      "transport": "stdio | sse | http",
+      "description": "optional description"
+    }
+  }
+}
+```
+
+### Environment Variable Expansion
+
+Both platforms support environment variable expansion in configuration:
+
+```json
+{
+  "mcpServers": {
+    "my-server": {
+      "command": "python",
+      "args": ["server.py"],
+      "env": {
+        "API_KEY": "${MY_API_KEY}",
+        "HOME_DIR": "${HOME}/mcp"
+      }
+    }
+  }
+}
+```
+
+## 🛡️ Security Best Practices
+
+### Input Validation
+
+This tool implements several security measures:
+- **Server name validation**: Only alphanumeric characters, hyphens, and underscores allowed
+- **Path traversal protection**: Executable paths are validated
+- **Command injection prevention**: Arguments are properly escaped
+- **URL validation**: Remote server URLs are verified before use
+
+### Authentication & Authorization
+
+**For remote MCP servers:**
+- Use OAuth 2.0 when available (recommended)
+- Store API keys in environment variables, not in configuration files
+- Use `${VAR_NAME}` syntax for sensitive values
+
+**Example with environment variables:**
+
+```bash
+# Set API key in environment
+export GITHUB_TOKEN="your-token-here"
+
+# Configuration uses variable reference
+{
+  "mcpServers": {
+    "github": {
+      "url": "https://api.github.com/mcp",
+      "env": {
+        "GITHUB_TOKEN": "${GITHUB_TOKEN}"
+      }
+    }
+  }
+}
+```
+
+### Permission Scopes
+
+- **User scope**: Best for personal tools and global utilities
+- **Project scope**: Use for team-shared configurations (committed to Git)
+- **Local scope** (Claude Code only): For sensitive or experimental configurations
+
+### Security Checklist
+
+- [ ] Store secrets in environment variables, not config files
+- [ ] Use project scope only for non-sensitive configurations
+- [ ] Validate server URLs before adding remote servers
+- [ ] Review MCP server permissions before installation
+- [ ] Keep MCP servers updated for security patches
+- [ ] Use `--dry-run` to preview commands before execution
+
+## 📖 Common MCP Servers
+
+Here are some popular MCP servers you can add:
+
+### File System Access
+
+```bash
+# Claude Code
+mcp-auto-add --json '{"command":"npx","args":["-y","@modelcontextprotocol/server-filesystem","/path"]}'
+
+# Gemini CLI
+mcp-auto-add --json '{"command":"npx","args":["-y","@modelcontextprotocol/server-filesystem","/path"]}' --gemini
+```
+
+### GitHub Integration
+
+```bash
+# Using URL-based server
+mcp-auto-add --json '{"url":"https://gitmcp.io/docs"}' --gemini
+```
+
+### Brave Search
+
+```bash
+mcp-auto-add --json '{"command":"npx","args":["-y","@anthropic/brave-search"],"env":{"BRAVE_API_KEY":"${BRAVE_API_KEY}"}}'
+```
+
+### Memory/Knowledge Graph
+
+```bash
+mcp-auto-add --json '{"command":"npx","args":["-y","@modelcontextprotocol/server-memory"]}'
+```
+
+## 🔧 Edit Mode
+
+The edit mode allows you to quickly open and modify existing MCP configuration files:
+
+```bash
+# Open interactive editor
+mcp-auto-add --edit
+
+# Or use the command alias
+mcp-auto-add edit
+```
+
+**Features:**
+- Auto-discovers all MCP config files (user, local, project scopes)
+- Lists all configured servers with command previews
+- Opens editor directly at the selected server's line number
+- Supports multiple editors (nano, vim, VS Code, emacs, sublime)
+- Respects `EDITOR` environment variable
+
+**Workflow:**
+1. Run `mcp-auto-add --edit`
+2. Select config file (if multiple exist)
+3. Select server to edit from the list
+4. Editor opens at the exact line of that server's configuration
+
 ## 🤝 Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
@@ -547,9 +845,11 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## 📚 Related Projects
 
-- [Claude Code](https://claude.ai/download) - AI coding assistant
+- [Claude Code](https://claude.ai/download) - AI coding assistant by Anthropic
+- [Gemini CLI](https://github.com/google-gemini/gemini-cli) - AI coding assistant by Google
 - [Model Context Protocol](https://modelcontextprotocol.io/) - MCP specification
 - [MCP Servers Repository](https://github.com/modelcontextprotocol/servers) - Official MCP servers
+- [MCP TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk) - Build custom MCP servers
 
 ## 👤 Author
 

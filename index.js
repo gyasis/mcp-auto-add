@@ -27,86 +27,170 @@ const autoDetectMode = args.includes('.');
 // Show help and exit if requested
 if (showHelp) {
     console.log(`
-🚀 MCP Auto-Add - Automatically detect and add MCP servers to Claude Code or Gemini CLI
+${chalk.cyan.bold('🚀 MCP Auto-Add')} - Automatically detect and add MCP servers to Claude Code or Gemini CLI
 
-USAGE:
-    mcp-auto-add [OPTIONS]              # Interactive mode with menu
-    mcp-auto-add . [OPTIONS]            # Auto-detect from current folder
-    mcp-auto-add edit                   # Edit MCP servers (interactive selection)
-    mcp-auto-add --clipboard [OPTIONS]  # Read JSON from clipboard
-    mcp-auto-add --json '<config>' [OPTIONS]      # Direct JSON input
-    mcp-auto-add --json-file <path> [OPTIONS]     # JSON from file
+${chalk.yellow.bold('USAGE:')}
+    mcp-auto-add [OPTIONS]                        Interactive mode with menu
+    mcp-auto-add . [OPTIONS]                      Auto-detect from current folder
+    mcp-auto-add edit                             Edit MCP servers (interactive)
+    mcp-auto-add --clipboard [OPTIONS]            Read JSON from clipboard
+    mcp-auto-add --json '<config>' [OPTIONS]      Direct JSON input
+    mcp-auto-add --json-file <path> [OPTIONS]     JSON from file
 
-OPTIONS:
-    -f, --force                  Skip confirmation prompts and use defaults
-    -v, --verbose                Show detailed verbose output
-    -d, --dry-run                Show what would be done without executing
-    -j, --json <config>          Provide JSON configuration directly
-    -jf, --json-file <path>      Read JSON configuration from file
-    -c, --clipboard              Read JSON configuration from clipboard
-    -g, --generate-command       Generate claude/gemini command and copy to clipboard
-    --gemini, --g                Use Gemini CLI instead of Claude Code
-    -e, --edit                   Edit MCP configuration file
-    -h, --help                   Show this help message
+${chalk.yellow.bold('OPTIONS:')}
+    ${chalk.green('-f, --force')}                  Skip confirmation prompts, use defaults
+    ${chalk.green('-v, --verbose')}                Show detailed verbose output
+    ${chalk.green('-d, --dry-run')}                Preview actions without executing
+    ${chalk.green('-j, --json <config>')}          Provide JSON configuration directly
+    ${chalk.green('-jf, --json-file <path>')}      Read JSON from file
+    ${chalk.green('-c, --clipboard')}              Read JSON from system clipboard
+    ${chalk.green('-g, --generate-command')}       Generate CLI command, copy to clipboard
+    ${chalk.green('--gemini')}                     Use Gemini CLI instead of Claude Code
+    ${chalk.green('-e, --edit')}                   Edit existing MCP configuration
+    ${chalk.green('-h, --help')}                   Show this help message
 
-EXAMPLES:
-    # Interactive mode - shows menu of choices (default)
+${chalk.yellow.bold('PLATFORM SELECTION:')}
+    ${chalk.cyan('Claude Code (default)')}         Works out of the box
+    ${chalk.cyan('Gemini CLI (--gemini)')}         Add --gemini flag to any command
+
+    Examples:
+        mcp-auto-add .                     # Add to Claude Code
+        mcp-auto-add . --gemini            # Add to Gemini CLI
+        mcp-auto-add --clipboard --gemini  # Clipboard mode for Gemini
+
+${chalk.yellow.bold('SERVER TYPES:')}
+    ${chalk.cyan('Local (STDIO)')}    Runs on your machine, uses stdin/stdout
+        {"command": "npx", "args": ["-y", "@example/server"]}
+        {"command": "python", "args": ["server.py"]}
+
+    ${chalk.cyan('Remote (URL)')}     Runs on external server, uses HTTP/SSE
+        {"url": "https://api.example.com/mcp"}
+        {"url": "https://gitmcp.io/docs", "transport": "sse"}
+
+${chalk.yellow.bold('JSON FORMATS:')}
+    ${chalk.cyan('Standard:')}        {"command": "npx", "args": ["-y", "tool"]}
+    ${chalk.cyan('With env:')}        {"command": "python", "args": ["server.py"], "env": {"KEY": "value"}}
+    ${chalk.cyan('URL-based:')}       {"url": "https://example.com/mcp"}
+    ${chalk.cyan('Wrapped:')}         {"server-name": {"url": "https://..."}}
+    ${chalk.cyan('Env vars:')}        {"env": {"API_KEY": "\${MY_API_KEY}"}}
+
+${chalk.yellow.bold('EXAMPLES:')}
+    ${chalk.dim('# Interactive mode - shows menu of choices')}
     mcp-auto-add
 
-    # Auto-detect mode - directly tries to detect from current folder
+    ${chalk.dim('# Auto-detect project type from current directory')}
     mcp-auto-add .
 
-    # Edit mode - interactive server selection
-    mcp-auto-add edit              # List all servers, select one to edit
-    mcp-auto-add --edit            # Same as 'mcp-auto-add edit'
+    ${chalk.dim('# Edit existing MCP servers (interactive selection)')}
+    mcp-auto-add edit
+    mcp-auto-add --edit
 
-    # Clipboard mode - reads JSON config from clipboard
+    ${chalk.dim('# Read JSON from clipboard')}
     mcp-auto-add --clipboard
-    
-    # Direct JSON input
-    mcp-auto-add --json '{"command":"npx","args":["-y","tool"]}'
-    
-    # Use Gemini CLI instead of Claude
+    mcp-auto-add --clipboard --gemini
+
+    ${chalk.dim('# Direct JSON input')}
+    mcp-auto-add --json '{"command":"npx","args":["-y","@modelcontextprotocol/server-filesystem","/path"]}'
+
+    ${chalk.dim('# Add URL-based remote server')}
+    mcp-auto-add --json '{"url":"https://gitmcp.io/docs"}'
+
+    ${chalk.dim('# Gemini CLI examples')}
     mcp-auto-add --gemini .
-    mcp-auto-add --gemini --clipboard
     mcp-auto-add --json '{"command":"npx","args":["-y","tool"]}' --gemini
-    
-    # JSON from file
-    mcp-auto-add --json-file ./mcp-config.json
-    
-    # Wrapped JSON format (copied from Claude settings)
-    mcp-auto-add --json '{"gitmcp":{"url":"https://gitmcp.io/docs"}}'
-    
-    # Generate command for clipboard (no execution)
-    mcp-auto-add --json '{"command":"npx","args":["-y","tool"]}' --generate-command
+
+    ${chalk.dim('# Generate command without executing')}
     mcp-auto-add --clipboard --generate-command
-    
-    # Force mode options
-    mcp-auto-add --force            # Auto-add with user scope (no prompts)
-    mcp-auto-add . --force          # Force auto-detect mode
-    mcp-auto-add --clipboard --force # Force clipboard mode
-    
-    # Testing and debugging
-    mcp-auto-add --dry-run          # See what would be done
-    mcp-auto-add . --verbose        # Detailed logging with auto-detect
 
-PROJECT DETECTION:
-    Python      - pyproject.toml, requirements.txt, or setup.py
-    TypeScript  - package.json + tsconfig.json  
-    Node.js     - package.json (without tsconfig.json)
+    ${chalk.dim('# Force mode (no prompts)')}
+    mcp-auto-add . --force
+    mcp-auto-add --clipboard --force --gemini
 
-SCOPES:
-    user        - Available across all your projects (default)
-    local       - Available only in current project
-    project     - Shared with team via .mcp.json file
+    ${chalk.dim('# Debug and test')}
+    mcp-auto-add --dry-run --verbose
 
-REQUIREMENTS:
-    - Claude Code CLI installed and in PATH (or use --gemini flag)
-    - For Gemini CLI: npm install -g @google/gemini-cli
-    - For Python: uv package manager and .venv environment
-    - For TypeScript: Build tools (npm/yarn/pnpm/bun)
+${chalk.yellow.bold('PROJECT DETECTION:')}
+    ${chalk.green('Python')}       pyproject.toml, requirements.txt, or setup.py
+    ${chalk.green('TypeScript')}   package.json + tsconfig.json
+    ${chalk.green('Node.js')}      package.json (without tsconfig.json)
 
-For more information, visit: https://github.com/gyasis/mcp-auto-add
+    Override: export PROJECT_TYPE=python|node|typescript
+
+${chalk.yellow.bold('SCOPES:')}
+    ${chalk.green('user')}         Available across all projects ${chalk.dim('(default, recommended)')}
+    ${chalk.green('local')}        Private to current project ${chalk.dim('(Claude Code only)')}
+    ${chalk.green('project')}      Shared with team via .mcp.json
+
+${chalk.yellow.bold('CONFIG FILE LOCATIONS:')}
+    ${chalk.cyan('Claude Code:')}
+        User:    ~/.claude.json or ~/.claude/settings.json
+        Local:   .claude/settings.local.json
+        Project: .mcp.json
+
+    ${chalk.cyan('Gemini CLI:')}
+        User:    ~/.gemini/settings.json
+        Project: .gemini/settings.json
+
+${chalk.yellow.bold('COMMAND DIFFERENCES:')}
+    ${chalk.cyan('Claude Code:')}
+        claude mcp add-json <name> '<json>' -s <scope>
+        claude mcp add --transport sse <name> <url>
+        claude mcp list
+        claude mcp remove <name>
+
+    ${chalk.cyan('Gemini CLI:')}
+        gemini mcp add --scope <scope> <name> <command> <args...>
+        gemini mcp add --transport http <name> <url>
+        gemini mcp list
+        gemini mcp remove <name>
+
+${chalk.yellow.bold('TRANSPORT TYPES:')}
+    ${chalk.green('stdio')}   Default for local servers (stdin/stdout)
+    ${chalk.green('sse')}     Server-Sent Events ${chalk.dim('(Claude default for remote)')}
+    ${chalk.green('http')}    Streamable HTTP ${chalk.dim('(Gemini default for remote)')}
+
+${chalk.yellow.bold('REQUIREMENTS:')}
+    ${chalk.cyan('General:')}      Node.js 18+, Git
+    ${chalk.cyan('Claude Code:')}  claude CLI in PATH (https://claude.ai/download)
+    ${chalk.cyan('Gemini CLI:')}   npm install -g @google/gemini-cli
+    ${chalk.cyan('Python:')}       uv package manager, .venv environment
+    ${chalk.cyan('TypeScript:')}   npm/yarn/pnpm/bun for building
+
+${chalk.yellow.bold('TROUBLESHOOTING:')}
+    ${chalk.red('CLI not found:')}
+        Claude: Install from https://claude.ai/download
+        Gemini: npm install -g @google/gemini-cli
+
+    ${chalk.red('Project not detected:')}
+        Ensure required files exist (package.json, pyproject.toml, etc.)
+        Override with: export PROJECT_TYPE=python
+
+    ${chalk.red('Build failed (TypeScript):')}
+        Run npm install first
+        Check package.json has "build" script
+
+    ${chalk.red('Python venv not found:')}
+        Run: uv venv && uv sync
+        Ensure server.py exists
+
+    ${chalk.red('Executable test failed:')}
+        Check file permissions
+        Verify path is correct
+
+${chalk.yellow.bold('ENVIRONMENT VARIABLES:')}
+    PROJECT_TYPE    Override auto-detection (python|node|typescript)
+    EDITOR          Preferred editor for --edit mode
+
+${chalk.yellow.bold('POPULAR MCP SERVERS:')}
+    Filesystem:  npx -y @modelcontextprotocol/server-filesystem /path
+    Memory:      npx -y @modelcontextprotocol/server-memory
+    Brave:       npx -y @anthropic/brave-search
+    GitHub:      https://gitmcp.io/docs
+
+${chalk.yellow.bold('MORE INFORMATION:')}
+    Documentation:  https://github.com/gyasis/mcp-auto-add
+    MCP Protocol:   https://modelcontextprotocol.io
+    Report Issues:  https://github.com/gyasis/mcp-auto-add/issues
 `);
     process.exit(0);
 }
