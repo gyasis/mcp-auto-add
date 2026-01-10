@@ -239,19 +239,21 @@ function validateServerName(name) {
 }
 
 // Validate transport type
-function validateTransport(transport) {
+function validateTransport(transport, forGemini = false) {
     const validTransports = ['sse', 'http', 'stdio'];
     if (transport && !validTransports.includes(transport)) {
         throw new Error(`Invalid transport type: ${transport}. Valid types: ${validTransports.join(', ')}`);
     }
-    return transport || 'sse';  // Default to sse for Claude
+    // Default to http for Gemini, sse for Claude
+    return transport || (forGemini ? 'http' : 'sse');
 }
 
 // Validate scope
-function validateScope(scope) {
-    const validScopes = ['user', 'local', 'project'];
+function validateScope(scope, forGemini = false) {
+    const validScopes = forGemini ? ['user', 'project'] : ['user', 'local', 'project'];
     if (scope && !validScopes.includes(scope)) {
-        throw new Error(`Invalid scope: ${scope}. Valid scopes: ${validScopes.join(', ')}`);
+        const scopeList = validScopes.join(', ');
+        throw new Error(`Invalid scope: ${scope}. Valid scopes for ${forGemini ? 'Gemini CLI' : 'Claude Code'}: ${scopeList}`);
     }
     return scope || 'user';
 }
@@ -655,12 +657,14 @@ function parseJSONConfig(jsonStr, serverName = null) {
         // Handle URL-based configuration (like gitmcp)
         if (parsed.url) {
             log('📌 Detected URL-based MCP configuration', 'info');
+            // Default transport: http for Gemini, sse for Claude
+            const defaultTransport = useGemini ? 'http' : 'sse';
             const config = {
                 url: parsed.url,
                 description: parsed.description || `URL-based MCP server: ${parsed.url}`,
                 name: parsed.name || serverName,
                 isUrlBased: true,
-                transport: parsed.transport || 'sse' // Default to SSE transport
+                transport: parsed.transport || defaultTransport
             };
             // Preserve the extracted server name if provided
             if (serverName) {
@@ -1662,16 +1666,24 @@ async function getInteractiveConfig(config, jsonMode = false) {
         }
     }
     
+    // Gemini CLI doesn't support 'local' scope
+    const scopeChoices = useGemini ? [
+        { name: 'user - Available to you across all projects (recommended)', value: 'user' },
+        { name: 'project - Shared with everyone in the project (requires .gemini/settings.json)', value: 'project' }
+    ] : [
+        { name: 'user - Available to you across all projects (recommended)', value: 'user' },
+        { name: 'local - Available only in this project', value: 'local' },
+        { name: 'project - Shared with everyone in the project (requires .mcp.json)', value: 'project' }
+    ];
+
+    const cliName = useGemini ? 'Gemini CLI' : 'Claude Code';
+
     const questions = [
         {
             type: 'list',
             name: 'scope',
             message: 'Choose MCP server scope:',
-            choices: [
-                { name: 'user - Available to you across all projects (recommended)', value: 'user' },
-                { name: 'local - Available only in this project', value: 'local' },
-                { name: 'project - Shared with everyone in the project (requires .mcp.json)', value: 'project' }
-            ],
+            choices: scopeChoices,
             default: 'user'
         },
         {
@@ -1692,7 +1704,7 @@ async function getInteractiveConfig(config, jsonMode = false) {
         {
             type: 'confirm',
             name: 'confirm',
-            message: 'Add this MCP server to Claude Code?',
+            message: `Add this MCP server to ${cliName}?`,
             default: true
         }
     ];
@@ -1714,25 +1726,30 @@ function findAllMCPConfigs() {
     const home = process.env.HOME || process.env.USERPROFILE || '';
     const configs = [];
 
-    // User scope configs
+    // User scope configs - includes both Claude/Cursor and Gemini paths
     const userPaths = [
-        { path: path.join(home, '.cursor', 'mcp.json'), scope: 'user', label: 'Cursor (user)' },
-        { path: path.join(home, '.claude', 'mcp.json'), scope: 'user', label: 'Claude (user)' }
+        { path: path.join(home, '.cursor', 'mcp.json'), scope: 'user', label: 'Cursor (user)', platform: 'claude' },
+        { path: path.join(home, '.claude', 'mcp.json'), scope: 'user', label: 'Claude (user)', platform: 'claude' },
+        { path: path.join(home, '.gemini', 'settings.json'), scope: 'user', label: 'Gemini CLI (user)', platform: 'gemini' },
+        { path: path.join(home, '.config', 'gemini', 'settings.json'), scope: 'user', label: 'Gemini CLI (user, XDG)', platform: 'gemini' }
     ];
 
-    // Local scope configs
+    // Local scope configs - Claude/Cursor only (Gemini doesn't support local scope)
     const localPaths = [
-        { path: path.join(cwd, '.cursor', 'mcp.json'), scope: 'local', label: 'Cursor (local)' },
-        { path: path.join(cwd, '.vscode', 'mcp.json'), scope: 'local', label: 'VS Code (local)' }
+        { path: path.join(cwd, '.cursor', 'mcp.json'), scope: 'local', label: 'Cursor (local)', platform: 'claude' },
+        { path: path.join(cwd, '.vscode', 'mcp.json'), scope: 'local', label: 'VS Code (local)', platform: 'claude' }
     ];
 
-    // Project scope config
-    const projectPath = { path: path.join(cwd, '.mcp.json'), scope: 'project', label: 'Project (.mcp.json)' };
+    // Project scope configs - both platforms
+    const projectPaths = [
+        { path: path.join(cwd, '.mcp.json'), scope: 'project', label: 'Project (.mcp.json)', platform: 'claude' },
+        { path: path.join(cwd, '.gemini', 'settings.json'), scope: 'project', label: 'Project (.gemini/settings.json)', platform: 'gemini' }
+    ];
 
     // Check which files exist
-    for (const config of [...userPaths, ...localPaths, projectPath]) {
+    for (const config of [...userPaths, ...localPaths, ...projectPaths]) {
         if (fs.existsSync(config.path)) {
-            logVerbose(`Found config: ${config.path}`);
+            logVerbose(`Found config: ${config.path} (${config.platform})`);
             configs.push(config);
         }
     }
@@ -1929,7 +1946,9 @@ async function handleEditMode() {
 
         log('\n✅ Editor closed', 'success');
         log('💡 Changes are saved when you exit the editor', 'info');
-        log('🔄 Restart Claude Code to apply changes', 'info');
+        // Show platform-appropriate restart message based on the config file being edited
+        const platformName = selectedConfig.platform === 'gemini' ? 'Gemini CLI' : 'Claude Code';
+        log(`🔄 Restart ${platformName} to apply changes`, 'info');
     } catch (error) {
         log(`❌ Failed to open editor: ${error.message}`, 'error');
         log(`💡 Try setting EDITOR environment variable`, 'info');
@@ -1946,6 +1965,24 @@ async function main() {
             await handleEditMode();
             process.exit(0);
         }
+
+        // Display clear platform confirmation banner
+        const cliName = useGemini ? 'Gemini CLI' : 'Claude Code';
+        const cliColor = useGemini ? chalk.blue : chalk.magenta;
+        console.log('');
+        console.log(cliColor('╔════════════════════════════════════════════════════════════╗'));
+        console.log(cliColor(`║  🎯 Target Platform: ${chalk.bold(cliName.padEnd(38))} ║`));
+        console.log(cliColor('╚════════════════════════════════════════════════════════════╝'));
+        console.log('');
+
+        if (useGemini) {
+            log('📋 Note: Gemini CLI supports scopes: user, project (not local)', 'info');
+            log('📋 Default transport for remote servers: http', 'info');
+        } else {
+            log('📋 Note: Claude Code supports scopes: user, local, project', 'info');
+            log('📋 Default transport for remote servers: sse', 'info');
+        }
+        console.log('');
 
         let config;
         let jsonMode = false;
@@ -2194,17 +2231,35 @@ async function main() {
                 log(`URL: ${config.url}`, 'info');
                 log(`Transport: ${config.transport}`, 'info');
                 log(`Description: ${config.description}`, 'info');
-                
+
+                // Gemini CLI doesn't support 'local' scope
+                const urlScopeChoices = useGemini ? [
+                    { name: 'user - Available to you across all projects (recommended)', value: 'user' },
+                    { name: 'project - Shared with everyone in the project (requires .gemini/settings.json)', value: 'project' }
+                ] : [
+                    { name: 'user - Available to you across all projects (recommended)', value: 'user' },
+                    { name: 'local - Available only in this project', value: 'local' },
+                    { name: 'project - Shared with everyone in the project (requires .mcp.json)', value: 'project' }
+                ];
+
+                const urlCliName = useGemini ? 'Gemini CLI' : 'Claude Code';
+
+                // Default transport: sse for Claude, http for Gemini
+                const defaultTransport = config.transport || (useGemini ? 'http' : 'sse');
+                const transportChoices = useGemini ? [
+                    { name: 'HTTP - recommended for Gemini', value: 'http' },
+                    { name: 'SSE (Server-Sent Events)', value: 'sse' }
+                ] : [
+                    { name: 'SSE (Server-Sent Events) - recommended for Claude', value: 'sse' },
+                    { name: 'HTTP', value: 'http' }
+                ];
+
                 const questions = [
                     {
                         type: 'list',
                         name: 'scope',
                         message: 'Choose MCP server scope:',
-                        choices: [
-                            { name: 'user - Available to you across all projects (recommended)', value: 'user' },
-                            { name: 'local - Available only in this project', value: 'local' },
-                            { name: 'project - Shared with everyone in the project (requires .mcp.json)', value: 'project' }
-                        ],
+                        choices: urlScopeChoices,
                         default: 'user'
                     },
                     {
@@ -2226,16 +2281,13 @@ async function main() {
                         type: 'list',
                         name: 'transport',
                         message: 'Choose transport type:',
-                        choices: [
-                            { name: 'SSE (Server-Sent Events) - recommended', value: 'sse' },
-                            { name: 'HTTP', value: 'http' }
-                        ],
-                        default: config.transport || 'sse'
+                        choices: transportChoices,
+                        default: defaultTransport
                     },
                     {
                         type: 'confirm',
                         name: 'confirm',
-                        message: 'Add this URL-based MCP server to Claude Code?',
+                        message: `Add this URL-based MCP server to ${urlCliName}?`,
                         default: true
                     }
                 ];
@@ -2266,15 +2318,18 @@ async function main() {
                     if (answers.scope === 'user') {
                         log('🌟 This server is available across all your projects', 'info');
                     } else if (answers.scope === 'local') {
+                        // Only Claude supports local scope
                         log('📁 This server is only available in the current project', 'info');
                     } else if (answers.scope === 'project') {
                         log('👥 This server will be shared with everyone in the project', 'info');
-                        log('📝 Make sure to commit the .mcp.json file to your repository', 'warning');
+                        const configFile = useGemini ? '.gemini/settings.json' : '.mcp.json';
+                        log(`📝 Make sure to commit the ${configFile} file to your repository`, 'warning');
                     }
-                    
+
                     const restartMsg = useGemini ? 'Restart Gemini CLI' : 'Restart Claude Code';
+                    const listCmd = useGemini ? 'gemini mcp list' : 'claude mcp list';
                     log(`🔄 ${restartMsg} if needed to see the new server`, 'info');
-                    log('📋 Run "claude mcp list" to see all configured servers', 'info');
+                    log(`📋 Run "${listCmd}" to see all configured servers`, 'info');
                 } else {
                     log('❌ URL-based MCP Auto-Add failed', 'error');
                     process.exit(1);
@@ -2324,26 +2379,27 @@ async function main() {
         
         // Execute MCP add command with chosen settings
         const executeFn = useGemini ? executeGeminiMCPAdd : executeClaudeMCPAdd;
-        const cliName = useGemini ? 'Gemini CLI' : 'Claude Code';
         const success = await executeFn(
-            interactiveConfig, 
-            interactiveConfig.serverName, 
+            interactiveConfig,
+            interactiveConfig.serverName,
             interactiveConfig.scope
         );
-        
+
         if (success) {
             log('🎉 MCP Auto-Add completed successfully!', 'success');
             log(`💡 MCP server "${interactiveConfig.serverName}" is now available in ${cliName}`, 'info');
             log(`📍 Scope: ${interactiveConfig.scope}`, 'info');
-            
+
             // Provide scope-specific guidance
             if (interactiveConfig.scope === 'user') {
                 log('🌟 This server is available across all your projects', 'info');
             } else if (interactiveConfig.scope === 'local') {
+                // Only Claude supports local scope
                 log('📁 This server is only available in the current project', 'info');
             } else if (interactiveConfig.scope === 'project') {
                 log('👥 This server will be shared with everyone in the project', 'info');
-                log('📝 Make sure to commit the .mcp.json file to your repository', 'warning');
+                const configFile = useGemini ? '.gemini/settings.json' : '.mcp.json';
+                log(`📝 Make sure to commit the ${configFile} file to your repository`, 'warning');
             }
             
             const restartMsg = useGemini ? 'Restart Gemini CLI' : 'Restart Claude Code';
