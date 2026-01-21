@@ -104,8 +104,15 @@ ${chalk.yellow.bold('EXAMPLES:')}
     mcp-auto-add --gemini .
     mcp-auto-add --json '{"command":"npx","args":["-y","tool"]}' --gemini
 
-    ${chalk.dim('# Generate command without executing')}
+    ${chalk.dim('# OpenCode examples')}
+    mcp-auto-add --opencode .
+    mcp-auto-add --json '{"command":"npx","args":["-y","tool"]}' --opencode
+    mcp-auto-add --json '{"url":"https://mcp.context7.com/mcp"}' --opencode
+    mcp-auto-add --clipboard --opencode --force
+
+    ${chalk.dim('# Generate command/config without executing')}
     mcp-auto-add --clipboard --generate-command
+    mcp-auto-add --clipboard --generate-command --opencode  ${chalk.dim('# Outputs JSON snippet')}
 
     ${chalk.dim('# Force mode (no prompts)')}
     mcp-auto-add . --force
@@ -154,9 +161,42 @@ ${chalk.yellow.bold('COMMAND DIFFERENCES:')}
         gemini mcp remove <name>
 
     ${chalk.cyan('OpenCode:')}
-        (Direct config file editing - no CLI commands)
-        Edit ~/.config/opencode/opencode.json (user scope)
-        Edit ./opencode.json (project scope)
+        (No CLI - writes directly to JSON config files)
+        User config:    ~/.config/opencode/opencode.json
+        Project config: ./opencode.json
+
+${chalk.yellow.bold('OPENCODE CONFIG FORMAT:')}
+    OpenCode uses a different JSON structure in its config files:
+
+    ${chalk.cyan('Local Server (stdio):')}
+        {
+          "mcp": {
+            "my-server": {
+              "type": "local",
+              "enabled": true,
+              "command": ["npx", "-y", "@example/server"],
+              "environment": { "API_KEY": "value" }
+            }
+          }
+        }
+
+    ${chalk.cyan('Remote Server (HTTP/SSE):')}
+        {
+          "mcp": {
+            "remote-server": {
+              "type": "remote",
+              "enabled": true,
+              "url": "https://mcp.example.com/mcp"
+            }
+          }
+        }
+
+    ${chalk.cyan('Key differences from Claude/Gemini:')}
+        • Uses "mcp" key instead of "mcpServers"
+        • Commands stored as array (not separate command/args)
+        • Has "type" field: "local" or "remote"
+        • Has "enabled" field for toggling servers
+        • Uses "environment" instead of "env"
 
 ${chalk.yellow.bold('TRANSPORT TYPES:')}
     ${chalk.green('stdio')}   Default for local servers (stdin/stdout)

@@ -1,8 +1,8 @@
 # MCP Auto-Add 🚀
 
-**Automatically detect MCP projects and add them to Claude Code or Gemini CLI with one command!**
+**Automatically detect MCP projects and add them to Claude Code, Gemini CLI, or OpenCode with one command!**
 
-This global Node.js package revolutionizes MCP development by automatically detecting your project type, generating the correct configuration, and adding it to **Claude Code** or **Gemini CLI** with a single command.
+This global Node.js package revolutionizes MCP development by automatically detecting your project type, generating the correct configuration, and adding it to **Claude Code**, **Gemini CLI**, or **OpenCode** with a single command.
 
 ## ✨ Features
 
@@ -11,7 +11,7 @@ This global Node.js package revolutionizes MCP development by automatically dete
 - **📋 Clipboard Integration**: Read JSON configurations directly from system clipboard
 - **🔧 Smart Configuration**: Generates the correct MCP configuration based on project structure
 - **🌐 Dual Server Support**: Handles both local (STDIO) and remote (URL-based) MCP servers
-- **🤖 Dual Platform Support**: Works with both **Claude Code** and **Gemini CLI**
+- **🤖 Triple Platform Support**: Works with **Claude Code**, **Gemini CLI**, and **OpenCode**
 - **🎯 Interactive Prompts**: Choose scope (user/local/project) and customize server name
 - **🧪 Path Validation**: Tests executable paths before adding to ensure they work
 - **🚀 One-Command Setup**: Automatically runs correct CLI command for server type
@@ -38,7 +38,7 @@ npm install -g .
 
 ### Basic Usage
 
-The tool supports multiple usage patterns for both **Claude Code** (default) and **Gemini CLI**:
+The tool supports multiple usage patterns for **Claude Code** (default), **Gemini CLI**, and **OpenCode**:
 
 ```bash
 # Claude Code (default)
@@ -50,6 +50,11 @@ mcp-auto-add --clipboard        # Read JSON config from clipboard
 mcp-auto-add --gemini           # Interactive mode for Gemini
 mcp-auto-add . --gemini         # Auto-detect for Gemini
 mcp-auto-add --clipboard --gemini  # Clipboard mode for Gemini
+
+# OpenCode (use --opencode or --oc flag)
+mcp-auto-add --opencode         # Interactive mode for OpenCode
+mcp-auto-add . --opencode       # Auto-detect for OpenCode
+mcp-auto-add --clipboard --oc   # Clipboard mode for OpenCode
 ```
 
 **Interactive Mode** will:
@@ -83,6 +88,7 @@ Options:
   -c, --clipboard              Read JSON configuration from clipboard
   -g, --generate-command       Generate CLI command and copy to clipboard
   --gemini                     Use Gemini CLI instead of Claude Code
+  --opencode, --oc             Use OpenCode instead of Claude Code
   -e, --edit                   Edit existing MCP configuration files
   -h, --help                   Show help information
 ```
@@ -126,6 +132,29 @@ mcp-auto-add --json '{"command":"npx","args":["-y","tool"]}' --gemini
 
 # URL-based server for Gemini
 mcp-auto-add --json '{"url":"https://api.example.com/mcp"}' --gemini
+
+# === OPENCODE ===
+
+# Interactive mode for OpenCode
+mcp-auto-add --opencode
+
+# Auto-detect and add to OpenCode (short flag)
+mcp-auto-add . --oc
+
+# Clipboard mode for OpenCode
+mcp-auto-add --clipboard --opencode
+
+# Direct JSON input for OpenCode
+mcp-auto-add --json '{"command":"npx","args":["-y","@modelcontextprotocol/server-filesystem","/home"]}' --opencode
+
+# URL-based (remote) server for OpenCode
+mcp-auto-add --json '{"url":"https://mcp.context7.com/mcp"}' --opencode
+
+# Generate OpenCode config snippet (outputs JSON, not CLI command)
+mcp-auto-add --json '{"command":"node","args":["server.js"]}' --opencode --generate-command
+
+# Force mode for scripting/automation
+mcp-auto-add --clipboard --opencode --force
 
 # === COMMON OPTIONS ===
 
@@ -470,6 +499,11 @@ claude mcp add --transport sse gitmcp https://gitmcp.io/docs
 - Ensure `gemini` command is in your PATH
 - Try running `gemini --version` to verify
 
+#### "OpenCode not installed" (only relevant if using `opencode mcp list`)
+- Install OpenCode: `curl -fsSL https://opencode.ai/install | bash`
+- Or via Homebrew: `brew install anomalyco/tap/opencode`
+- **Note**: mcp-auto-add does NOT require OpenCode CLI - it writes directly to config files
+
 #### "TypeScript build failed"
 - Fix build errors in your TypeScript project
 - Ensure all dependencies are installed
@@ -564,36 +598,37 @@ mcp-auto-add --force --dry-run  # Test first
 mcp-auto-add --force             # Actually add
 ```
 
-## 🔄 Claude Code vs Gemini CLI Comparison
+## 🔄 Platform Comparison: Claude Code vs Gemini CLI vs OpenCode
 
-This tool supports both **Claude Code** and **Gemini CLI** for MCP server management. Here's a detailed comparison:
+This tool supports **Claude Code**, **Gemini CLI**, and **OpenCode** for MCP server management. Here's a detailed comparison:
 
 ### Command Format Differences
 
-| Feature | Claude Code | Gemini CLI |
-|---------|-------------|------------|
-| **Add Local Server** | `claude mcp add-json <name> '<json>' -s <scope>` | `gemini mcp add --scope <scope> <name> <command> <args...>` |
-| **Add Remote Server** | `claude mcp add --transport sse <name> <url>` | `gemini mcp add --transport http <name> <url>` |
-| **List Servers** | `claude mcp list` | `gemini mcp list` |
-| **Remove Server** | `claude mcp remove <name>` | `gemini mcp remove <name>` |
-| **Default Transport** | `sse` (Server-Sent Events) | `http` (Streamable HTTP) |
-| **Scope Flag** | `-s` or `--scope` | `--scope` (no short form) |
+| Feature | Claude Code | Gemini CLI | OpenCode |
+|---------|-------------|------------|----------|
+| **Add Local Server** | `claude mcp add-json <name> '<json>' -s <scope>` | `gemini mcp add --scope <scope> <name> <command> <args...>` | Direct config file edit |
+| **Add Remote Server** | `claude mcp add --transport sse <name> <url>` | `gemini mcp add --transport http <name> <url>` | Direct config file edit |
+| **List Servers** | `claude mcp list` | `gemini mcp list` | `opencode mcp list` |
+| **Remove Server** | `claude mcp remove <name>` | `gemini mcp remove <name>` | Edit config file |
+| **Default Transport** | `sse` (Server-Sent Events) | `http` (Streamable HTTP) | N/A |
+| **Scope Flag** | `-s` or `--scope` | `--scope` (no short form) | N/A |
+| **CLI Required** | Yes | Yes | **No** (writes directly to JSON) |
 
 ### Configuration File Locations
 
-| Scope | Claude Code | Gemini CLI |
-|-------|-------------|------------|
-| **User** | `~/.claude.json` or `~/.claude/settings.json` | `~/.gemini/settings.json` |
-| **Local** | `.claude/settings.local.json` | N/A |
-| **Project** | `.mcp.json` (shared) | `.gemini/settings.json` (project root) |
+| Scope | Claude Code | Gemini CLI | OpenCode |
+|-------|-------------|------------|----------|
+| **User** | `~/.claude.json` or `~/.claude/settings.json` | `~/.gemini/settings.json` | `~/.config/opencode/opencode.json` |
+| **Local** | `.claude/settings.local.json` | N/A | N/A |
+| **Project** | `.mcp.json` (shared) | `.gemini/settings.json` (project root) | `./opencode.json` |
 
 ### Transport Types
 
-| Transport | Claude Code | Gemini CLI | Description |
-|-----------|-------------|------------|-------------|
-| **stdio** | Default for local | Default for local | Standard input/output streams |
-| **sse** | Default for remote | Supported | Server-Sent Events |
-| **http** | Supported | Default for remote | Streamable HTTP |
+| Transport | Claude Code | Gemini CLI | OpenCode | Description |
+|-----------|-------------|------------|----------|-------------|
+| **stdio** | Default for local | Default for local | `"type": "local"` | Standard input/output streams |
+| **sse** | Default for remote | Supported | `"type": "remote"` | Server-Sent Events |
+| **http** | Supported | Default for remote | `"type": "remote"` | Streamable HTTP |
 
 ### Scope Behavior
 
@@ -606,6 +641,11 @@ This tool supports both **Claude Code** and **Gemini CLI** for MCP server manage
 - `user` - Available across all projects (default)
 - `project` - Available only in current project
 
+**OpenCode Scopes:**
+- `user` - Global config at `~/.config/opencode/opencode.json` (recommended)
+- `project` - Project-local config at `./opencode.json`
+- ⚠️ **Note**: OpenCode does NOT support a `local` scope
+
 ### Example Commands
 
 ```bash
@@ -617,6 +657,9 @@ claude mcp add-json my-server '{"command":"npx","args":["-y","@example/server"]}
 # Gemini CLI
 gemini mcp add --scope user my-server npx -y @example/server
 
+# OpenCode (via mcp-auto-add - writes directly to config)
+mcp-auto-add --json '{"command":"npx","args":["-y","@example/server"]}' --opencode
+
 # === Adding a remote MCP server ===
 
 # Claude Code (uses SSE by default)
@@ -624,6 +667,9 @@ claude mcp add --transport sse github-mcp https://api.github.com/mcp
 
 # Gemini CLI (uses HTTP by default)
 gemini mcp add --transport http github-mcp https://api.github.com/mcp
+
+# OpenCode (via mcp-auto-add - writes directly to config)
+mcp-auto-add --json '{"url":"https://api.github.com/mcp"}' --opencode
 ```
 
 ## 📝 Manual Configuration Guide
@@ -685,6 +731,74 @@ If you prefer to configure MCP servers manually without CLI commands, you can ed
   }
 }
 ```
+
+### OpenCode Configuration
+
+OpenCode uses a **different JSON structure** than Claude Code and Gemini CLI. The key differences are:
+- Uses `"mcp"` key instead of `"mcpServers"`
+- Commands are stored as a single array (not separate `command` and `args`)
+- Has a `"type"` field: `"local"` or `"remote"`
+- Has an `"enabled"` field for toggling servers on/off
+- Uses `"environment"` instead of `"env"`
+
+**User-level configuration** (`~/.config/opencode/opencode.json`):
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "anthropic/claude-sonnet-4-20250514",
+  "mcp": {
+    "filesystem": {
+      "type": "local",
+      "enabled": true,
+      "command": ["npx", "-y", "@modelcontextprotocol/server-filesystem", "/home"],
+      "environment": {
+        "LOG_LEVEL": "debug"
+      }
+    },
+    "context7": {
+      "type": "remote",
+      "enabled": true,
+      "url": "https://mcp.context7.com/mcp"
+    },
+    "github": {
+      "type": "local",
+      "enabled": true,
+      "command": ["npx", "-y", "@modelcontextprotocol/server-github"],
+      "environment": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}"
+      }
+    }
+  }
+}
+```
+
+**Project-level configuration** (`./opencode.json` in project root):
+
+```json
+{
+  "mcp": {
+    "project-tool": {
+      "type": "local",
+      "enabled": true,
+      "command": ["python", "./tools/server.py"],
+      "environment": {
+        "PROJECT_ROOT": "${PWD}"
+      }
+    }
+  }
+}
+```
+
+**OpenCode Server Configuration Fields:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `type` | `"local"` \| `"remote"` | Yes | Server type |
+| `enabled` | boolean | No | Toggle server on/off (default: true) |
+| `command` | string[] | For local | Command + args as array |
+| `url` | string | For remote | Server URL |
+| `environment` | object | No | Environment variables |
 
 ### Configuration Schema
 
@@ -847,9 +961,11 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 - [Claude Code](https://claude.ai/download) - AI coding assistant by Anthropic
 - [Gemini CLI](https://github.com/google-gemini/gemini-cli) - AI coding assistant by Google
+- [OpenCode](https://opencode.ai) - Terminal-native open-source AI coding assistant
 - [Model Context Protocol](https://modelcontextprotocol.io/) - MCP specification
 - [MCP Servers Repository](https://github.com/modelcontextprotocol/servers) - Official MCP servers
 - [MCP TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk) - Build custom MCP servers
+- [Context7 MCP](https://mcp.context7.com) - Library documentation server
 
 ## 👤 Author
 
