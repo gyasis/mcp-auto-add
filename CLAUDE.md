@@ -4,7 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-mcp-auto-add is a global Node.js CLI tool that automatically detects MCP (Model Context Protocol) projects and adds them to Claude Code with a single command. It intelligently detects project types (Python, Node.js, TypeScript), generates appropriate MCP configurations, and integrates with the Claude CLI.
+mcp-auto-add is a global Node.js CLI tool that automatically detects MCP (Model Context Protocol) projects and adds them to multiple AI coding assistants with a single command. It intelligently detects project types (Python, Node.js, TypeScript), generates appropriate MCP configurations, and integrates with Claude Code, Gemini CLI, and OpenCode.
+
+### Supported Platforms
+- **Claude Code** (default): Uses `claude mcp add-json` CLI command
+- **Gemini CLI** (`--gemini`): Uses `gemini mcp add` CLI command
+- **OpenCode** (`--opencode` or `--oc`): Writes directly to `opencode.json` config files
 
 ## Development Commands
 
@@ -50,6 +55,15 @@ mcp-auto-add
    - Generates proper `claude mcp add-json` commands
    - Handles JSON escaping and command-line argument formatting
 
+5. **MCP Configuration Editor** (`handleEditMode()`)
+   - Finds all MCP configuration files across different scopes (user, local, project)
+   - Parses JSON configs to extract server names, commands, and line numbers
+   - Interactive menu for config selection (if multiple exist)
+   - Interactive server selection with command preview
+   - Opens editor at exact line where selected server is defined
+   - Supports multiple editors with proper line-jump syntax (nano, vim, VS Code, emacs, sublime)
+   - Auto-detects editor from `EDITOR` env var or scans for available editors
+
 ### Key Design Patterns
 
 - **Smart Detection**: File-based project type detection with fallback mechanisms
@@ -64,9 +78,56 @@ mcp-auto-add
 - `--force` / `-f`: Skip confirmation prompts
 - `--verbose` / `-v`: Enable detailed logging
 - `--dry-run` / `-d`: Show what would be done without executing
+- `--edit` / `-e`: Edit existing MCP configuration files
+- `--json` / `-j`: Provide JSON configuration directly
+- `--json-file` / `-jf`: Read JSON configuration from file
+- `--clipboard` / `-c`: Read JSON configuration from clipboard
+- `--generate-command` / `-g`: Generate command/config and copy to clipboard
+- `--gemini`: Target Gemini CLI instead of Claude Code
+- `--opencode` / `--oc`: Target OpenCode instead of Claude Code
+
+### Edit Command
+The edit command provides an interactive way to edit specific MCP servers:
+```bash
+# Interactive mode - select config file, then select server
+mcp-auto-add edit
+
+# Alternative syntax
+mcp-auto-add --edit
+```
+
+**Interactive Workflow:**
+1. **Config Selection**: Choose which config file to edit (if multiple exist)
+2. **Server List**: See all configured servers with their commands
+3. **Server Selection**: Select which server to edit from the list
+4. **Editor Opens**: Opens at the exact line where that server is defined
+
+**Features:**
+- Automatically finds all MCP config files (user, local, project scopes)
+- Lists all servers with preview of their commands
+- Detects line numbers for each server definition
+- Opens editor directly at the selected server's configuration line
+- Supports line jumping in multiple editors:
+  - nano, vim, vi, nvim: `+line` syntax
+  - VS Code: `-g file:line` syntax
+  - Emacs: `+line` syntax
+  - Sublime: `file:line` syntax
+- Respects `EDITOR` environment variable
+- Supports multiple config file locations:
+  - **Claude/Cursor**:
+    - User scope: `~/.cursor/mcp.json` or `~/.claude/mcp.json`
+    - Local scope: `.cursor/mcp.json` or `.vscode/mcp.json`
+    - Project scope: `.mcp.json`
+  - **Gemini CLI**:
+    - User scope: `~/.gemini/settings.json`
+    - Project scope: `.gemini/settings.json`
+  - **OpenCode**:
+    - User scope: `~/.config/opencode/opencode.json`
+    - Project scope: `./opencode.json`
 
 ### Environment Variables
 - `PROJECT_TYPE`: Override automatic detection (python/node/typescript)
+- `EDITOR`: Set preferred text editor for edit mode (e.g., nano, vim, code)
 - Standard `.env` file support for project-specific environment variables
 
 ## Project Type Requirements
@@ -94,6 +155,23 @@ mcp-auto-add
 - Requires `claude` command in PATH
 - Uses `claude mcp add-json` for server registration
 - Validates Claude CLI availability before execution
+
+### Gemini CLI Dependencies
+- Requires `gemini` command in PATH
+- Uses `gemini mcp add` with positional arguments
+- Supports user and project scopes (no local scope)
+
+### OpenCode Integration
+- **No CLI required** - writes directly to config files
+- Config format uses `mcp` key with server objects containing:
+  - `type`: "local" or "remote"
+  - `command`: Array of command and args (for local)
+  - `url`: Server URL (for remote)
+  - `enabled`: true/false
+  - `environment`: Environment variables object
+- Automatically creates config directory if missing
+- Backs up existing config if JSON is invalid
+- Supports user scope (`~/.config/opencode/opencode.json`) and project scope (`./opencode.json`)
 
 ### Node.js Environment
 - Uses `which node` and `nvm which node` for executable detection
@@ -131,6 +209,9 @@ All error messages should:
 Since this is a CLI tool that integrates with external systems:
 1. Test with different project structures (Python/Node.js/TypeScript)
 2. Verify behavior with different package managers
-3. Test with and without Claude CLI availability
+3. Test with and without CLI availability (Claude, Gemini)
 4. Validate dry-run mode accuracy
 5. Test global vs local package detection logic
+6. Test all three platforms: Claude Code, Gemini CLI, OpenCode
+7. Test config file creation and merging for OpenCode
+8. Verify correct JSON format generation for each platform

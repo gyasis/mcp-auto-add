@@ -16,6 +16,7 @@ const generateCommand = args.includes('--generate-command') || args.includes('-g
 const useClipboard = args.includes('--clipboard') || args.includes('-c');
 const editMode = args.includes('--edit') || args.includes('-e') || args[0] === 'edit';
 const useGemini = args.includes('--gemini') || args.includes('--g');
+const useOpenCode = args.includes('--opencode') || args.includes('--oc');
 
 // Input mode detection
 const jsonFlagIndex = args.findIndex(arg => arg === '--json' || arg === '-j');
@@ -46,17 +47,21 @@ ${chalk.yellow.bold('OPTIONS:')}
     ${chalk.green('-c, --clipboard')}              Read JSON from system clipboard
     ${chalk.green('-g, --generate-command')}       Generate CLI command, copy to clipboard
     ${chalk.green('--gemini')}                     Use Gemini CLI instead of Claude Code
+    ${chalk.green('--opencode, --oc')}             Use OpenCode instead of Claude Code
     ${chalk.green('-e, --edit')}                   Edit existing MCP configuration
     ${chalk.green('-h, --help')}                   Show this help message
 
 ${chalk.yellow.bold('PLATFORM SELECTION:')}
     ${chalk.cyan('Claude Code (default)')}         Works out of the box
     ${chalk.cyan('Gemini CLI (--gemini)')}         Add --gemini flag to any command
+    ${chalk.cyan('OpenCode (--opencode)')}         Add --opencode flag to any command
 
     Examples:
         mcp-auto-add .                     # Add to Claude Code
         mcp-auto-add . --gemini            # Add to Gemini CLI
+        mcp-auto-add . --opencode          # Add to OpenCode
         mcp-auto-add --clipboard --gemini  # Clipboard mode for Gemini
+        mcp-auto-add --clipboard --opencode # Clipboard mode for OpenCode
 
 ${chalk.yellow.bold('SERVER TYPES:')}
     ${chalk.cyan('Local (STDIO)')}    Runs on your machine, uses stdin/stdout
@@ -131,6 +136,10 @@ ${chalk.yellow.bold('CONFIG FILE LOCATIONS:')}
         User:    ~/.gemini/settings.json
         Project: .gemini/settings.json
 
+    ${chalk.cyan('OpenCode:')}
+        User:    ~/.config/opencode/opencode.json
+        Project: ./opencode.json (in project root)
+
 ${chalk.yellow.bold('COMMAND DIFFERENCES:')}
     ${chalk.cyan('Claude Code:')}
         claude mcp add-json <name> '<json>' -s <scope>
@@ -144,6 +153,11 @@ ${chalk.yellow.bold('COMMAND DIFFERENCES:')}
         gemini mcp list
         gemini mcp remove <name>
 
+    ${chalk.cyan('OpenCode:')}
+        (Direct config file editing - no CLI commands)
+        Edit ~/.config/opencode/opencode.json (user scope)
+        Edit ./opencode.json (project scope)
+
 ${chalk.yellow.bold('TRANSPORT TYPES:')}
     ${chalk.green('stdio')}   Default for local servers (stdin/stdout)
     ${chalk.green('sse')}     Server-Sent Events ${chalk.dim('(Claude default for remote)')}
@@ -153,6 +167,7 @@ ${chalk.yellow.bold('REQUIREMENTS:')}
     ${chalk.cyan('General:')}      Node.js 18+, Git
     ${chalk.cyan('Claude Code:')}  claude CLI in PATH (https://claude.ai/download)
     ${chalk.cyan('Gemini CLI:')}   npm install -g @google/gemini-cli
+    ${chalk.cyan('OpenCode:')}     curl -fsSL https://opencode.ai/install | bash
     ${chalk.cyan('Python:')}       uv package manager, .venv environment
     ${chalk.cyan('TypeScript:')}   npm/yarn/pnpm/bun for building
 
@@ -300,7 +315,7 @@ function findExecutable(name) {
 const cwd = process.cwd();
 const projectName = path.basename(cwd);
 
-const cliTarget = useGemini ? 'Gemini CLI' : 'Claude Code';
+const cliTarget = useOpenCode ? 'OpenCode' : (useGemini ? 'Gemini CLI' : 'Claude Code');
 log(`🚀 MCP Auto-Add - Automatically adding MCP server to ${cliTarget}`, 'title');
 log(`📁 Working directory: ${cwd}`, 'info');
 log(`📦 Project name: ${projectName}`, 'info');
@@ -1558,6 +1573,180 @@ async function executeGeminiMCPAdd(config, serverName, scope = 'user') {
 // END GEMINI CLI FUNCTIONS
 // ============================================================================
 
+// ============================================================================
+// OPENCODE FUNCTIONS
+// ============================================================================
+
+// Function to detect OpenCode MCP config file location based on scope
+function findOpenCodeMCPConfigPath(scope = 'user') {
+    logVerbose(`🔍 Finding OpenCode MCP config file for scope: ${scope}...`);
+
+    const home = process.env.HOME || process.env.USERPROFILE || '';
+
+    if (scope === 'user') {
+        // User scope: ~/.config/opencode/opencode.json
+        const configDir = path.join(home, '.config', 'opencode');
+        const configPath = path.join(configDir, 'opencode.json');
+        logVerbose(`OpenCode user MCP config will be at: ${configPath}`);
+        return configPath;
+    } else if (scope === 'project') {
+        // Project scope: ./opencode.json in project root
+        const projectPath = path.join(cwd, 'opencode.json');
+        logVerbose(`OpenCode project MCP config will be at: ${projectPath}`);
+        return projectPath;
+    }
+
+    // Default to user scope
+    return path.join(home, '.config', 'opencode', 'opencode.json');
+}
+
+// Function to convert standard MCP config to OpenCode format
+function convertToOpenCodeFormat(config, serverName) {
+    // OpenCode format:
+    // {
+    //   "$schema": "https://opencode.ai/config.json",
+    //   "mcp": {
+    //     "server-name": {
+    //       "type": "local" or "remote",
+    //       "command": ["cmd", "arg1", "arg2"],  // for local
+    //       "url": "https://...",                 // for remote
+    //       "enabled": true,
+    //       "environment": {}
+    //     }
+    //   }
+    // }
+
+    const serverConfig = {
+        enabled: true
+    };
+
+    if (config.url) {
+        // Remote server
+        serverConfig.type = 'remote';
+        serverConfig.url = config.url;
+    } else {
+        // Local server
+        serverConfig.type = 'local';
+        // OpenCode uses 'command' as an array including args
+        const commandArray = [config.command];
+        if (config.args && config.args.length > 0) {
+            commandArray.push(...config.args);
+        }
+        serverConfig.command = commandArray;
+    }
+
+    // Add environment variables if present
+    if (config.env && Object.keys(config.env).length > 0) {
+        serverConfig.environment = config.env;
+    }
+
+    return serverConfig;
+}
+
+// Function to execute OpenCode MCP add (writes directly to config file)
+async function executeOpenCodeMCPAdd(config, serverName, scope = 'user') {
+    const validatedName = validateServerName(serverName);
+    const validatedScope = validateScope(scope, false); // OpenCode supports user, local, project but we'll use user/project
+
+    const configPath = findOpenCodeMCPConfigPath(validatedScope);
+    const configDir = path.dirname(configPath);
+
+    // Convert config to OpenCode format
+    const openCodeServerConfig = convertToOpenCodeFormat(config, validatedName);
+
+    log(`📤 Adding MCP server "${validatedName}" to OpenCode (scope: ${validatedScope})...`, 'info');
+    log(`📂 Config file: ${configPath}`, 'info');
+    logVerbose(`Server config: ${JSON.stringify(openCodeServerConfig, null, 2)}`);
+
+    if (isDryRun) {
+        log('🔍 DRY RUN - Would write to OpenCode config:', 'info');
+        log(`   File: ${configPath}`, 'info');
+        log(`   Server: ${validatedName}`, 'info');
+        log(`   Config: ${JSON.stringify(openCodeServerConfig, null, 2)}`, 'info');
+        return true;
+    }
+
+    try {
+        // Ensure directory exists
+        if (!fs.existsSync(configDir)) {
+            logVerbose(`Creating directory: ${configDir}`);
+            fs.mkdirSync(configDir, { recursive: true });
+        }
+
+        // Read existing config or create new one
+        let existingConfig = {};
+        if (fs.existsSync(configPath)) {
+            const content = fs.readFileSync(configPath, 'utf8');
+            try {
+                existingConfig = JSON.parse(content);
+                logVerbose(`Loaded existing config from ${configPath}`);
+            } catch (e) {
+                log(`⚠️  Existing config file has invalid JSON, creating backup...`, 'warning');
+                const backupPath = `${configPath}.backup.${Date.now()}`;
+                fs.copyFileSync(configPath, backupPath);
+                log(`   Backup saved to: ${backupPath}`, 'info');
+                existingConfig = {};
+            }
+        }
+
+        // Ensure proper structure
+        if (!existingConfig['$schema']) {
+            existingConfig['$schema'] = 'https://opencode.ai/config.json';
+        }
+        if (!existingConfig.mcp) {
+            existingConfig.mcp = {};
+        }
+
+        // Check if server already exists
+        if (existingConfig.mcp[validatedName]) {
+            log(`⚠️  Server "${validatedName}" already exists in config`, 'warning');
+            const { overwrite } = await inquirer.prompt([
+                {
+                    type: 'confirm',
+                    name: 'overwrite',
+                    message: `Overwrite existing "${validatedName}" configuration?`,
+                    default: false
+                }
+            ]);
+
+            if (!overwrite) {
+                log('❌ Cancelled - server not overwritten', 'error');
+                return false;
+            }
+        }
+
+        // Add or update the server
+        existingConfig.mcp[validatedName] = openCodeServerConfig;
+
+        // Write the config file
+        const configJson = JSON.stringify(existingConfig, null, 2);
+        fs.writeFileSync(configPath, configJson, 'utf8');
+
+        log(`✅ Successfully added MCP server "${validatedName}" to OpenCode!`, 'success');
+        log(`📂 Config saved to: ${configPath}`, 'info');
+        log('🔄 Restart OpenCode to load the new server', 'info');
+
+        return true;
+    } catch (error) {
+        log(`❌ Failed to add MCP server to OpenCode: ${error.message}`, 'error');
+        log('💡 Troubleshooting tips:', 'info');
+        log('  1. Check write permissions for config directory', 'info');
+        log('  2. Verify the config path is accessible', 'info');
+        log(`  3. Manual path: ${configPath}`, 'info');
+        return false;
+    }
+}
+
+// Function to execute OpenCode MCP add for URL-based servers
+async function executeOpenCodeMCPAddURL(config, serverName, scope = 'user') {
+    // For URL-based servers, use the same function - config will have url property
+    return executeOpenCodeMCPAdd(config, serverName, scope);
+}
+
+// ============================================================================
+// END OPENCODE FUNCTIONS
+// ============================================================================
+
 // Function to test executable path
 async function testExecutablePath(command) {
     logVerbose(`🧪 Testing executable path: ${command}`);
@@ -1666,17 +1855,17 @@ async function getInteractiveConfig(config, jsonMode = false) {
         }
     }
     
-    // Gemini CLI doesn't support 'local' scope
-    const scopeChoices = useGemini ? [
+    // Gemini CLI and OpenCode don't support 'local' scope
+    const scopeChoices = (useGemini || useOpenCode) ? [
         { name: 'user - Available to you across all projects (recommended)', value: 'user' },
-        { name: 'project - Shared with everyone in the project (requires .gemini/settings.json)', value: 'project' }
+        { name: `project - Shared with everyone in the project (requires ${useOpenCode ? 'opencode.json' : '.gemini/settings.json'})`, value: 'project' }
     ] : [
         { name: 'user - Available to you across all projects (recommended)', value: 'user' },
         { name: 'local - Available only in this project', value: 'local' },
         { name: 'project - Shared with everyone in the project (requires .mcp.json)', value: 'project' }
     ];
 
-    const cliName = useGemini ? 'Gemini CLI' : 'Claude Code';
+    const cliName = useOpenCode ? 'OpenCode' : (useGemini ? 'Gemini CLI' : 'Claude Code');
 
     const questions = [
         {
@@ -1726,24 +1915,26 @@ function findAllMCPConfigs() {
     const home = process.env.HOME || process.env.USERPROFILE || '';
     const configs = [];
 
-    // User scope configs - includes both Claude/Cursor and Gemini paths
+    // User scope configs - includes Claude/Cursor, Gemini, and OpenCode paths
     const userPaths = [
         { path: path.join(home, '.cursor', 'mcp.json'), scope: 'user', label: 'Cursor (user)', platform: 'claude' },
         { path: path.join(home, '.claude', 'mcp.json'), scope: 'user', label: 'Claude (user)', platform: 'claude' },
         { path: path.join(home, '.gemini', 'settings.json'), scope: 'user', label: 'Gemini CLI (user)', platform: 'gemini' },
-        { path: path.join(home, '.config', 'gemini', 'settings.json'), scope: 'user', label: 'Gemini CLI (user, XDG)', platform: 'gemini' }
+        { path: path.join(home, '.config', 'gemini', 'settings.json'), scope: 'user', label: 'Gemini CLI (user, XDG)', platform: 'gemini' },
+        { path: path.join(home, '.config', 'opencode', 'opencode.json'), scope: 'user', label: 'OpenCode (user)', platform: 'opencode' }
     ];
 
-    // Local scope configs - Claude/Cursor only (Gemini doesn't support local scope)
+    // Local scope configs - Claude/Cursor only (Gemini and OpenCode don't support local scope)
     const localPaths = [
         { path: path.join(cwd, '.cursor', 'mcp.json'), scope: 'local', label: 'Cursor (local)', platform: 'claude' },
         { path: path.join(cwd, '.vscode', 'mcp.json'), scope: 'local', label: 'VS Code (local)', platform: 'claude' }
     ];
 
-    // Project scope configs - both platforms
+    // Project scope configs - all platforms
     const projectPaths = [
         { path: path.join(cwd, '.mcp.json'), scope: 'project', label: 'Project (.mcp.json)', platform: 'claude' },
-        { path: path.join(cwd, '.gemini', 'settings.json'), scope: 'project', label: 'Project (.gemini/settings.json)', platform: 'gemini' }
+        { path: path.join(cwd, '.gemini', 'settings.json'), scope: 'project', label: 'Project (.gemini/settings.json)', platform: 'gemini' },
+        { path: path.join(cwd, 'opencode.json'), scope: 'project', label: 'OpenCode (project)', platform: 'opencode' }
     ];
 
     // Check which files exist
@@ -1765,8 +1956,11 @@ function listServersInConfig(configPath) {
         const lines = content.split('\n');
         const servers = [];
 
-        if (config.mcpServers) {
-            const serverNames = Object.keys(config.mcpServers);
+        // Handle both Claude/Cursor/Gemini format (mcpServers) and OpenCode format (mcp)
+        const serverContainer = config.mcpServers || config.mcp || null;
+
+        if (serverContainer) {
+            const serverNames = Object.keys(serverContainer);
 
             // Find line number for each server
             serverNames.forEach(serverName => {
@@ -1776,7 +1970,7 @@ function listServersInConfig(configPath) {
                         servers.push({
                             name: serverName,
                             line: i + 1, // Line numbers are 1-based
-                            config: config.mcpServers[serverName]
+                            config: serverContainer[serverName]
                         });
                         break;
                     }
@@ -1967,15 +2161,18 @@ async function main() {
         }
 
         // Display clear platform confirmation banner
-        const cliName = useGemini ? 'Gemini CLI' : 'Claude Code';
-        const cliColor = useGemini ? chalk.blue : chalk.magenta;
+        const cliName = useOpenCode ? 'OpenCode' : (useGemini ? 'Gemini CLI' : 'Claude Code');
+        const cliColor = useOpenCode ? chalk.green : (useGemini ? chalk.blue : chalk.magenta);
         console.log('');
         console.log(cliColor('╔════════════════════════════════════════════════════════════╗'));
         console.log(cliColor(`║  🎯 Target Platform: ${chalk.bold(cliName.padEnd(38))} ║`));
         console.log(cliColor('╚════════════════════════════════════════════════════════════╝'));
         console.log('');
 
-        if (useGemini) {
+        if (useOpenCode) {
+            log('📋 Note: OpenCode supports scopes: user, project (not local)', 'info');
+            log('📋 Config is written directly to opencode.json files', 'info');
+        } else if (useGemini) {
             log('📋 Note: Gemini CLI supports scopes: user, project (not local)', 'info');
             log('📋 Default transport for remote servers: http', 'info');
         } else {
@@ -2179,29 +2376,54 @@ async function main() {
             if (generateCommand) {
                 // For JSON/clipboard input, prioritize extracted name; for auto-detect, use project name
                 const defaultServerName = config.extractedServerName || config.name || (!jsonMode ? projectName : null) || 'mcp-server';
-                const transport = config.transport || (useGemini ? 'http' : 'sse');
-                const cliName = useGemini ? 'Gemini' : 'Claude';
-                const command = useGemini 
-                    ? `gemini mcp add --transport ${transport} ${defaultServerName} ${config.url}`
-                    : `claude mcp add --transport ${transport} ${defaultServerName} ${config.url}`;
-                
-                log(`📋 Generated ${cliName} MCP command:`, 'title');
-                console.log('\n' + chalk.green(command) + '\n');
-                
-                // Try to copy to clipboard
-                const clipboardTool = copyToClipboard(command);
-                if (clipboardTool) {
-                    log(`✅ Command copied to clipboard using ${clipboardTool}`, 'success');
-                    log('📌 You can now paste it in your terminal with Ctrl+V', 'info');
+                const transport = config.transport || ((useGemini || useOpenCode) ? 'http' : 'sse');
+                const cliName = useOpenCode ? 'OpenCode' : (useGemini ? 'Gemini' : 'Claude');
+
+                if (useOpenCode) {
+                    // OpenCode doesn't have CLI - generate JSON config snippet
+                    const openCodeConfig = {
+                        [defaultServerName]: {
+                            type: 'remote',
+                            url: config.url,
+                            enabled: true
+                        }
+                    };
+                    const jsonSnippet = JSON.stringify(openCodeConfig, null, 2);
+                    log(`📋 Generated OpenCode MCP config (add to opencode.json "mcp" section):`, 'title');
+                    console.log('\n' + chalk.green(jsonSnippet) + '\n');
+
+                    // Try to copy to clipboard
+                    const clipboardTool = copyToClipboard(jsonSnippet);
+                    if (clipboardTool) {
+                        log(`✅ Config copied to clipboard using ${clipboardTool}`, 'success');
+                        log('📌 Paste into your opencode.json "mcp" section', 'info');
+                    } else {
+                        log('⚠️  Could not copy to clipboard (install xclip, xsel, or pbcopy)', 'warning');
+                        log('📋 Please copy the config above manually', 'info');
+                    }
                 } else {
-                    log('⚠️  Could not copy to clipboard (install xclip, xsel, or pbcopy)', 'warning');
-                    log('📋 Please copy the command above manually', 'info');
+                    const command = useGemini
+                        ? `gemini mcp add --transport ${transport} ${defaultServerName} ${config.url}`
+                        : `claude mcp add --transport ${transport} ${defaultServerName} ${config.url}`;
+
+                    log(`📋 Generated ${cliName} MCP command:`, 'title');
+                    console.log('\n' + chalk.green(command) + '\n');
+
+                    // Try to copy to clipboard
+                    const clipboardTool = copyToClipboard(command);
+                    if (clipboardTool) {
+                        log(`✅ Command copied to clipboard using ${clipboardTool}`, 'success');
+                        log('📌 You can now paste it in your terminal with Ctrl+V', 'info');
+                    } else {
+                        log('⚠️  Could not copy to clipboard (install xclip, xsel, or pbcopy)', 'warning');
+                        log('📋 Please copy the command above manually', 'info');
+                    }
+                    log('💡 To run: paste the command in your terminal', 'info');
                 }
-                
+
                 log(`🎯 Server: ${defaultServerName}`, 'info');
                 log(`🌐 URL: ${config.url}`, 'info');
                 log(`🚀 Transport: ${transport}`, 'info');
-                log('💡 To run: paste the command in your terminal', 'info');
                 process.exit(0);
             }
             
@@ -2211,14 +2433,14 @@ async function main() {
             
             if (isForce) {
                 // Force mode - use defaults
-                const executeFn = useGemini ? executeGeminiMCPAddURL : executeClaudeMCPAddURL;
-                const cliName = useGemini ? 'Gemini CLI' : 'Claude Code';
+                const executeFn = useOpenCode ? executeOpenCodeMCPAddURL : (useGemini ? executeGeminiMCPAddURL : executeClaudeMCPAddURL);
+                const cliName = useOpenCode ? 'OpenCode' : (useGemini ? 'Gemini CLI' : 'Claude Code');
                 const success = await executeFn(config, defaultServerName, 'user');
-                
+
                 if (success) {
                     log('🎉 URL-based MCP Auto-Add completed successfully!', 'success');
                     log(`💡 MCP server "${defaultServerName}" is now available in ${cliName}`, 'info');
-                    const restartMsg = useGemini ? 'Restart Gemini CLI' : 'Restart Claude Code';
+                    const restartMsg = useOpenCode ? 'Restart OpenCode' : (useGemini ? 'Restart Gemini CLI' : 'Restart Claude Code');
                     log(`🔄 ${restartMsg} if needed to see the new server`, 'info');
                 } else {
                     log('❌ URL-based MCP Auto-Add failed', 'error');
@@ -2232,27 +2454,30 @@ async function main() {
                 log(`Transport: ${config.transport}`, 'info');
                 log(`Description: ${config.description}`, 'info');
 
-                // Gemini CLI doesn't support 'local' scope
-                const urlScopeChoices = useGemini ? [
+                // Gemini CLI and OpenCode don't support 'local' scope
+                const urlScopeChoices = (useGemini || useOpenCode) ? [
                     { name: 'user - Available to you across all projects (recommended)', value: 'user' },
-                    { name: 'project - Shared with everyone in the project (requires .gemini/settings.json)', value: 'project' }
+                    { name: `project - Shared with everyone in the project (requires ${useOpenCode ? 'opencode.json' : '.gemini/settings.json'})`, value: 'project' }
                 ] : [
                     { name: 'user - Available to you across all projects (recommended)', value: 'user' },
                     { name: 'local - Available only in this project', value: 'local' },
                     { name: 'project - Shared with everyone in the project (requires .mcp.json)', value: 'project' }
                 ];
 
-                const urlCliName = useGemini ? 'Gemini CLI' : 'Claude Code';
+                const urlCliName = useOpenCode ? 'OpenCode' : (useGemini ? 'Gemini CLI' : 'Claude Code');
 
-                // Default transport: sse for Claude, http for Gemini
-                const defaultTransport = config.transport || (useGemini ? 'http' : 'sse');
-                const transportChoices = useGemini ? [
+                // Default transport: sse for Claude, http for Gemini/OpenCode
+                const defaultTransport = config.transport || ((useGemini || useOpenCode) ? 'http' : 'sse');
+                const transportChoices = useOpenCode ? [
+                    { name: 'HTTP - recommended for OpenCode remote servers', value: 'http' },
+                    { name: 'SSE (Server-Sent Events)', value: 'sse' }
+                ] : (useGemini ? [
                     { name: 'HTTP - recommended for Gemini', value: 'http' },
                     { name: 'SSE (Server-Sent Events)', value: 'sse' }
                 ] : [
                     { name: 'SSE (Server-Sent Events) - recommended for Claude', value: 'sse' },
                     { name: 'HTTP', value: 'http' }
-                ];
+                ]);
 
                 const questions = [
                     {
@@ -2303,8 +2528,8 @@ async function main() {
                 config.transport = answers.transport;
                 
                 // Execute MCP add command for URL server
-                const executeFn = useGemini ? executeGeminiMCPAddURL : executeClaudeMCPAddURL;
-                const cliName = useGemini ? 'Gemini CLI' : 'Claude Code';
+                const executeFn = useOpenCode ? executeOpenCodeMCPAddURL : (useGemini ? executeGeminiMCPAddURL : executeClaudeMCPAddURL);
+                const cliName = useOpenCode ? 'OpenCode' : (useGemini ? 'Gemini CLI' : 'Claude Code');
                 const success = await executeFn(config, answers.serverName.trim(), answers.scope);
                 
                 if (success) {
@@ -2344,28 +2569,46 @@ async function main() {
             // For JSON/clipboard input, prioritize extracted name; for auto-detect, use project name
             const defaultServerName = config.extractedServerName || config.name || (jsonMode ? 'mcp-server' : projectName) || 'mcp-server';
             const defaultScope = 'user';
-            
-            const command = useGemini 
-                ? generateGeminiMCPCommand(config, defaultServerName, defaultScope)
-                : generateClaudeCommand(config, defaultServerName, defaultScope);
-            const cliName = useGemini ? 'Gemini' : 'Claude';
-            
-            log(`📋 Generated ${cliName} MCP command:`, 'title');
-            console.log('\n' + chalk.green(command) + '\n');
-            
-            // Try to copy to clipboard
-            const clipboardTool = copyToClipboard(command);
-            if (clipboardTool) {
-                log(`✅ Command copied to clipboard using ${clipboardTool}`, 'success');
-                log('📌 You can now paste it in your terminal with Ctrl+V', 'info');
+            const cliName = useOpenCode ? 'OpenCode' : (useGemini ? 'Gemini' : 'Claude');
+
+            if (useOpenCode) {
+                // OpenCode doesn't have CLI - generate JSON config snippet
+                const openCodeConfig = convertToOpenCodeFormat(config, defaultServerName);
+                const jsonSnippet = JSON.stringify({ [defaultServerName]: openCodeConfig }, null, 2);
+                log(`📋 Generated OpenCode MCP config (add to opencode.json "mcp" section):`, 'title');
+                console.log('\n' + chalk.green(jsonSnippet) + '\n');
+
+                // Try to copy to clipboard
+                const clipboardTool = copyToClipboard(jsonSnippet);
+                if (clipboardTool) {
+                    log(`✅ Config copied to clipboard using ${clipboardTool}`, 'success');
+                    log('📌 Paste into your opencode.json "mcp" section', 'info');
+                } else {
+                    log('⚠️  Could not copy to clipboard (install xclip, xsel, or pbcopy)', 'warning');
+                    log('📋 Please copy the config above manually', 'info');
+                }
             } else {
-                log('⚠️  Could not copy to clipboard (install xclip, xsel, or pbcopy)', 'warning');
-                log('📋 Please copy the command above manually', 'info');
+                const command = useGemini
+                    ? generateGeminiMCPCommand(config, defaultServerName, defaultScope)
+                    : generateClaudeCommand(config, defaultServerName, defaultScope);
+
+                log(`📋 Generated ${cliName} MCP command:`, 'title');
+                console.log('\n' + chalk.green(command) + '\n');
+
+                // Try to copy to clipboard
+                const clipboardTool = copyToClipboard(command);
+                if (clipboardTool) {
+                    log(`✅ Command copied to clipboard using ${clipboardTool}`, 'success');
+                    log('📌 You can now paste it in your terminal with Ctrl+V', 'info');
+                } else {
+                    log('⚠️  Could not copy to clipboard (install xclip, xsel, or pbcopy)', 'warning');
+                    log('📋 Please copy the command above manually', 'info');
+                }
+                log('💡 To run: paste the command in your terminal', 'info');
             }
-            
+
             log(`🎯 Server: ${defaultServerName}`, 'info');
             log(`📍 Scope: ${defaultScope}`, 'info');
-            log('💡 To run: paste the command in your terminal', 'info');
             process.exit(0);
         }
         
@@ -2378,7 +2621,7 @@ async function main() {
         }
         
         // Execute MCP add command with chosen settings
-        const executeFn = useGemini ? executeGeminiMCPAdd : executeClaudeMCPAdd;
+        const executeFn = useOpenCode ? executeOpenCodeMCPAdd : (useGemini ? executeGeminiMCPAdd : executeClaudeMCPAdd);
         const success = await executeFn(
             interactiveConfig,
             interactiveConfig.serverName,
@@ -2386,8 +2629,9 @@ async function main() {
         );
 
         if (success) {
+            const successCliName = useOpenCode ? 'OpenCode' : (useGemini ? 'Gemini CLI' : 'Claude Code');
             log('🎉 MCP Auto-Add completed successfully!', 'success');
-            log(`💡 MCP server "${interactiveConfig.serverName}" is now available in ${cliName}`, 'info');
+            log(`💡 MCP server "${interactiveConfig.serverName}" is now available in ${successCliName}`, 'info');
             log(`📍 Scope: ${interactiveConfig.scope}`, 'info');
 
             // Provide scope-specific guidance
@@ -2398,14 +2642,18 @@ async function main() {
                 log('📁 This server is only available in the current project', 'info');
             } else if (interactiveConfig.scope === 'project') {
                 log('👥 This server will be shared with everyone in the project', 'info');
-                const configFile = useGemini ? '.gemini/settings.json' : '.mcp.json';
+                const configFile = useOpenCode ? 'opencode.json' : (useGemini ? '.gemini/settings.json' : '.mcp.json');
                 log(`📝 Make sure to commit the ${configFile} file to your repository`, 'warning');
             }
-            
-            const restartMsg = useGemini ? 'Restart Gemini CLI' : 'Restart Claude Code';
-            const listCmd = useGemini ? 'gemini mcp list' : 'claude mcp list';
+
+            const restartMsg = useOpenCode ? 'Restart OpenCode' : (useGemini ? 'Restart Gemini CLI' : 'Restart Claude Code');
             log(`🔄 ${restartMsg} if needed to see the new server`, 'info');
-            log(`📋 Run "${listCmd}" to see all configured servers`, 'info');
+            if (!useOpenCode) {
+                const listCmd = useGemini ? 'gemini mcp list' : 'claude mcp list';
+                log(`📋 Run "${listCmd}" to see all configured servers`, 'info');
+            } else {
+                log(`📋 Check your opencode.json to see configured servers`, 'info');
+            }
         } else {
             log('❌ MCP Auto-Add failed', 'error');
             process.exit(1);
