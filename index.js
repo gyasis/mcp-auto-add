@@ -17,6 +17,8 @@ const useClipboard = args.includes('--clipboard') || args.includes('-c');
 const editMode = args.includes('--edit') || args.includes('-e') || args[0] === 'edit';
 const useGemini = args.includes('--gemini') || args.includes('--g');
 const useOpenCode = args.includes('--opencode') || args.includes('--oc');
+const checkMode = args.includes('--check') || args.includes('--validate');
+const setupMode = args.includes('--setup') || args[0] === 'setup';
 
 // Input mode detection
 const jsonFlagIndex = args.findIndex(arg => arg === '--json' || arg === '-j');
@@ -34,6 +36,8 @@ ${chalk.yellow.bold('USAGE:')}
     mcp-auto-add [OPTIONS]                        Interactive mode with menu
     mcp-auto-add . [OPTIONS]                      Auto-detect from current folder
     mcp-auto-add edit                             Edit MCP servers (interactive)
+    mcp-auto-add setup                            Run first-time setup wizard
+    mcp-auto-add --check                          Validate environment & show paths
     mcp-auto-add --clipboard [OPTIONS]            Read JSON from clipboard
     mcp-auto-add --json '<config>' [OPTIONS]      Direct JSON input
     mcp-auto-add --json-file <path> [OPTIONS]     JSON from file
@@ -49,6 +53,8 @@ ${chalk.yellow.bold('OPTIONS:')}
     ${chalk.green('--gemini')}                     Use Gemini CLI instead of Claude Code
     ${chalk.green('--opencode, --oc')}             Use OpenCode instead of Claude Code
     ${chalk.green('-e, --edit')}                   Edit existing MCP configuration
+    ${chalk.green('--check, --validate')}          Check environment & installed tools
+    ${chalk.green('--setup')}                      Run interactive setup wizard
     ${chalk.green('-h, --help')}                   Show this help message
 
 ${chalk.yellow.bold('PLATFORM SELECTION:')}
@@ -351,6 +357,578 @@ function findExecutable(name) {
     }
 }
 
+// ==========================================
+// FIRST-RUN VALIDATION & SETUP
+// ==========================================
+
+// Config file for storing custom paths
+function getConfigFilePath() {
+    const home = process.env.HOME || process.env.USERPROFILE || '';
+    return path.join(home, '.mcp-auto-add-config.json');
+}
+
+// Load saved configuration
+function loadSavedConfig() {
+    try {
+        const configPath = getConfigFilePath();
+        if (fs.existsSync(configPath)) {
+            return JSON.parse(fs.readFileSync(configPath, 'utf8'));
+        }
+    } catch (error) {
+        logVerbose(`Could not load config: ${error.message}`);
+    }
+    return {};
+}
+
+// Save configuration
+function saveSavedConfig(config) {
+    try {
+        const configPath = getConfigFilePath();
+        fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+        logVerbose(`Saved config to: ${configPath}`);
+        return true;
+    } catch (error) {
+        logVerbose(`Could not save config: ${error.message}`);
+        return false;
+    }
+}
+
+// Platform detection helpers
+function getPlatformInfo() {
+    const platform = process.platform;
+    const isMacOS = platform === 'darwin';
+    const isLinux = platform === 'linux';
+    const isWindows = platform === 'win32';
+    const isAppleSilicon = isMacOS && process.arch === 'arm64';
+
+    return { platform, isMacOS, isLinux, isWindows, isAppleSilicon };
+}
+
+// Get platform-specific installation instructions
+function getInstallInstructions(tool) {
+    const { isMacOS, isLinux, isWindows, isAppleSilicon } = getPlatformInfo();
+
+    const instructions = {
+        'claude': {
+            title: 'Claude Code CLI',
+            macOS: [
+                'Option 1: Download from https://claude.ai/download',
+                'Option 2: brew install claude (if available)',
+                'After install, run: claude --version'
+            ],
+            linux: [
+                'Download from https://claude.ai/download',
+                'Or use the install script from Anthropic',
+                'After install, run: claude --version'
+            ],
+            windows: [
+                'Download from https://claude.ai/download',
+                'Run the installer and follow prompts',
+                'Restart terminal, then run: claude --version'
+            ]
+        },
+        'gemini': {
+            title: 'Gemini CLI',
+            macOS: [
+                'npm install -g @google/gemini-cli',
+                'Or: yarn global add @google/gemini-cli',
+                'After install, run: gemini --version'
+            ],
+            linux: [
+                'npm install -g @google/gemini-cli',
+                'Or: yarn global add @google/gemini-cli',
+                'After install, run: gemini --version'
+            ],
+            windows: [
+                'npm install -g @google/gemini-cli',
+                'After install, run: gemini --version'
+            ]
+        },
+        'node': {
+            title: 'Node.js',
+            macOS: [
+                isAppleSilicon ? 'brew install node  (Apple Silicon)' : 'brew install node',
+                'Or download from https://nodejs.org',
+                'Or use nvm: curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash',
+                'After install, run: node --version'
+            ],
+            linux: [
+                'Using nvm (recommended):',
+                '  curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash',
+                '  nvm install --lts',
+                'Or: sudo apt install nodejs npm  (Debian/Ubuntu)',
+                'Or: sudo dnf install nodejs  (Fedora)',
+                'After install, run: node --version'
+            ],
+            windows: [
+                'Download from https://nodejs.org',
+                'Or use nvm-windows: https://github.com/coreybutler/nvm-windows',
+                'After install, run: node --version'
+            ]
+        },
+        'uv': {
+            title: 'uv (Python package manager)',
+            macOS: [
+                'curl -LsSf https://astral.sh/uv/install.sh | sh',
+                'Or: brew install uv',
+                'After install, run: uv --version'
+            ],
+            linux: [
+                'curl -LsSf https://astral.sh/uv/install.sh | sh',
+                'After install, run: uv --version'
+            ],
+            windows: [
+                'powershell -c "irm https://astral.sh/uv/install.ps1 | iex"',
+                'After install, run: uv --version'
+            ]
+        },
+        'xclip': {
+            title: 'xclip (clipboard utility)',
+            macOS: [
+                'macOS uses pbcopy/pbpaste natively - no installation needed!'
+            ],
+            linux: [
+                'sudo apt install xclip  (Debian/Ubuntu)',
+                'sudo dnf install xclip  (Fedora)',
+                'sudo pacman -S xclip  (Arch)',
+                'Alternative: sudo apt install xsel'
+            ],
+            windows: [
+                'Windows uses clip.exe natively - no installation needed!'
+            ]
+        },
+        'opencode': {
+            title: 'OpenCode (optional - no CLI required)',
+            macOS: [
+                'Option 1: brew install anomalyco/tap/opencode',
+                'Option 2: curl -fsSL https://opencode.ai/install | bash',
+                'Note: mcp-auto-add writes directly to config files,',
+                '      so OpenCode CLI is NOT required for --opencode mode!'
+            ],
+            linux: [
+                'curl -fsSL https://opencode.ai/install | bash',
+                'Note: mcp-auto-add writes directly to config files,',
+                '      so OpenCode CLI is NOT required for --opencode mode!'
+            ],
+            windows: [
+                'Download from https://opencode.ai',
+                'Note: mcp-auto-add writes directly to config files,',
+                '      so OpenCode CLI is NOT required for --opencode mode!'
+            ]
+        }
+    };
+
+    const toolInfo = instructions[tool];
+    if (!toolInfo) return null;
+
+    let platformInstructions;
+    if (isMacOS) platformInstructions = toolInfo.macOS;
+    else if (isLinux) platformInstructions = toolInfo.linux;
+    else platformInstructions = toolInfo.windows;
+
+    return {
+        title: toolInfo.title,
+        instructions: platformInstructions
+    };
+}
+
+// Display installation instructions
+function showInstallInstructions(tool) {
+    const info = getInstallInstructions(tool);
+    if (!info) return;
+
+    console.log('');
+    console.log(chalk.yellow(`📦 How to install ${info.title}:`));
+    console.log(chalk.dim('─'.repeat(50)));
+    info.instructions.forEach(instruction => {
+        console.log(chalk.cyan(`   ${instruction}`));
+    });
+    console.log(chalk.dim('─'.repeat(50)));
+    console.log('');
+}
+
+// Validate a path exists and is executable
+function validateExecutablePath(execPath) {
+    if (!execPath || typeof execPath !== 'string') {
+        return { valid: false, error: 'Path is empty or invalid' };
+    }
+
+    const resolvedPath = path.resolve(execPath.trim());
+
+    if (!fs.existsSync(resolvedPath)) {
+        return { valid: false, error: `File does not exist: ${resolvedPath}` };
+    }
+
+    try {
+        const stats = fs.statSync(resolvedPath);
+        if (stats.isDirectory()) {
+            return { valid: false, error: 'Path is a directory, not an executable' };
+        }
+
+        // Check if executable (Unix-like systems)
+        if (process.platform !== 'win32') {
+            try {
+                fs.accessSync(resolvedPath, fs.constants.X_OK);
+            } catch (e) {
+                return { valid: false, error: 'File is not executable (missing execute permission)' };
+            }
+        }
+
+        return { valid: true, path: resolvedPath };
+    } catch (error) {
+        return { valid: false, error: error.message };
+    }
+}
+
+// Interactive path picker for a specific tool
+async function promptForToolPath(toolName, description) {
+    console.log('');
+    console.log(chalk.yellow(`⚠️  ${description} was not found automatically.`));
+
+    const { action } = await inquirer.prompt([
+        {
+            type: 'list',
+            name: 'action',
+            message: `What would you like to do?`,
+            choices: [
+                { name: '📥 Show installation instructions', value: 'install' },
+                { name: '📂 Enter path manually', value: 'manual' },
+                { name: '🔄 Skip (continue without this tool)', value: 'skip' },
+                { name: '❌ Exit', value: 'exit' }
+            ]
+        }
+    ]);
+
+    if (action === 'exit') {
+        log('👋 Exiting. Please install required tools and try again.', 'info');
+        process.exit(0);
+    }
+
+    if (action === 'skip') {
+        return null;
+    }
+
+    if (action === 'install') {
+        showInstallInstructions(toolName);
+
+        const { retry } = await inquirer.prompt([
+            {
+                type: 'confirm',
+                name: 'retry',
+                message: 'Have you installed it? Try to detect again?',
+                default: true
+            }
+        ]);
+
+        if (retry) {
+            // Try to find it again
+            const found = findExecutable(toolName);
+            if (found) {
+                log(`✅ Found ${toolName} at: ${found}`, 'success');
+                return found;
+            }
+            log(`❌ Still not found. You may need to restart your terminal.`, 'warning');
+        }
+
+        // Offer manual entry as fallback
+        return promptForManualPath(toolName, description);
+    }
+
+    if (action === 'manual') {
+        return promptForManualPath(toolName, description);
+    }
+
+    return null;
+}
+
+// Prompt for manual path entry
+async function promptForManualPath(toolName, description) {
+    const { isMacOS, isAppleSilicon } = getPlatformInfo();
+
+    // Suggest common paths based on platform
+    let suggestions = [];
+    const home = process.env.HOME || process.env.USERPROFILE || '';
+
+    if (toolName === 'claude') {
+        suggestions = [
+            path.join(home, '.local', 'bin', 'claude'),
+            '/usr/local/bin/claude',
+            isMacOS && isAppleSilicon ? '/opt/homebrew/bin/claude' : null,
+            path.join(home, 'bin', 'claude')
+        ].filter(Boolean);
+    } else if (toolName === 'gemini') {
+        suggestions = [
+            path.join(home, '.npm-global', 'bin', 'gemini'),
+            '/usr/local/bin/gemini',
+            isMacOS && isAppleSilicon ? '/opt/homebrew/bin/gemini' : null,
+            path.join(home, '.local', 'bin', 'gemini')
+        ].filter(Boolean);
+    } else if (toolName === 'node') {
+        suggestions = [
+            '/usr/local/bin/node',
+            isMacOS && isAppleSilicon ? '/opt/homebrew/bin/node' : null,
+            '/usr/bin/node',
+            path.join(home, '.nvm', 'versions', 'node', 'v20.0.0', 'bin', 'node')
+        ].filter(Boolean);
+    } else if (toolName === 'uv') {
+        suggestions = [
+            path.join(home, '.cargo', 'bin', 'uv'),
+            '/usr/local/bin/uv',
+            isMacOS && isAppleSilicon ? '/opt/homebrew/bin/uv' : null,
+            path.join(home, '.local', 'bin', 'uv')
+        ].filter(Boolean);
+    }
+
+    console.log('');
+    if (suggestions.length > 0) {
+        console.log(chalk.dim('Common locations to check:'));
+        suggestions.forEach(s => console.log(chalk.dim(`  • ${s}`)));
+        console.log('');
+    }
+
+    const { manualPath } = await inquirer.prompt([
+        {
+            type: 'input',
+            name: 'manualPath',
+            message: `Enter full path to ${toolName} executable:`,
+            validate: (input) => {
+                if (!input.trim()) {
+                    return 'Path cannot be empty. Enter a path or press Ctrl+C to cancel.';
+                }
+                const result = validateExecutablePath(input);
+                if (!result.valid) {
+                    return `Invalid: ${result.error}`;
+                }
+                return true;
+            }
+        }
+    ]);
+
+    const validatedPath = validateExecutablePath(manualPath);
+    if (validatedPath.valid) {
+        // Ask if user wants to save this path
+        const { savePath } = await inquirer.prompt([
+            {
+                type: 'confirm',
+                name: 'savePath',
+                message: 'Save this path for future use?',
+                default: true
+            }
+        ]);
+
+        if (savePath) {
+            const config = loadSavedConfig();
+            config.customPaths = config.customPaths || {};
+            config.customPaths[toolName] = validatedPath.path;
+            saveSavedConfig(config);
+            log(`✅ Path saved to ~/.mcp-auto-add-config.json`, 'success');
+        }
+
+        return validatedPath.path;
+    }
+
+    return null;
+}
+
+// Check for saved custom path
+function getCustomPath(toolName) {
+    const config = loadSavedConfig();
+    if (config.customPaths && config.customPaths[toolName]) {
+        const customPath = config.customPaths[toolName];
+        if (fs.existsSync(customPath)) {
+            logVerbose(`Using saved custom path for ${toolName}: ${customPath}`);
+            return customPath;
+        } else {
+            logVerbose(`Saved path for ${toolName} no longer exists: ${customPath}`);
+        }
+    }
+    return null;
+}
+
+// Main validation function - checks all required tools
+async function validateEnvironment(options = {}) {
+    const { requireClaude = false, requireGemini = false, requireNode = true, requireClipboard = false } = options;
+    const { isMacOS, isLinux } = getPlatformInfo();
+
+    const results = {
+        node: null,
+        claude: null,
+        gemini: null,
+        clipboard: null,
+        allValid: true,
+        warnings: []
+    };
+
+    console.log('');
+    console.log(chalk.cyan('🔍 Checking environment...'));
+    console.log(chalk.dim('─'.repeat(50)));
+
+    // Check Node.js (always required)
+    if (requireNode) {
+        let nodePath = getCustomPath('node') || findExecutable('node');
+        if (nodePath) {
+            try {
+                const version = execSync(`"${nodePath}" --version`, { encoding: 'utf8' }).trim();
+                console.log(chalk.green(`✅ Node.js: ${version} (${nodePath})`));
+                results.node = nodePath;
+            } catch (e) {
+                console.log(chalk.red(`❌ Node.js: Found but failed to execute`));
+                results.warnings.push('Node.js found but could not execute');
+            }
+        } else {
+            console.log(chalk.red(`❌ Node.js: Not found`));
+            results.allValid = false;
+        }
+    }
+
+    // Check Claude CLI
+    if (requireClaude) {
+        let claudePath = getCustomPath('claude') || findExecutable('claude');
+        if (claudePath) {
+            try {
+                const version = execSync(`"${claudePath}" --version 2>&1`, { encoding: 'utf8' }).trim().split('\n')[0];
+                console.log(chalk.green(`✅ Claude CLI: ${version}`));
+                results.claude = claudePath;
+            } catch (e) {
+                console.log(chalk.yellow(`⚠️  Claude CLI: Found but version check failed (${claudePath})`));
+                results.claude = claudePath; // Still use it
+                results.warnings.push('Claude CLI found but version check failed');
+            }
+        } else {
+            console.log(chalk.red(`❌ Claude CLI: Not found`));
+            results.allValid = false;
+        }
+    }
+
+    // Check Gemini CLI
+    if (requireGemini) {
+        let geminiPath = getCustomPath('gemini') || findExecutable('gemini');
+        if (geminiPath) {
+            try {
+                const version = execSync(`"${geminiPath}" --version 2>&1`, { encoding: 'utf8' }).trim().split('\n')[0];
+                console.log(chalk.green(`✅ Gemini CLI: ${version}`));
+                results.gemini = geminiPath;
+            } catch (e) {
+                console.log(chalk.yellow(`⚠️  Gemini CLI: Found but version check failed (${geminiPath})`));
+                results.gemini = geminiPath;
+                results.warnings.push('Gemini CLI found but version check failed');
+            }
+        } else {
+            console.log(chalk.red(`❌ Gemini CLI: Not found`));
+            results.allValid = false;
+        }
+    }
+
+    // Check clipboard tools (for clipboard mode)
+    if (requireClipboard) {
+        let clipboardOk = false;
+        if (isMacOS) {
+            // macOS always has pbcopy/pbpaste
+            clipboardOk = findExecutable('pbpaste') !== null;
+            if (clipboardOk) {
+                console.log(chalk.green(`✅ Clipboard: pbcopy/pbpaste (native)`));
+            }
+        } else if (isLinux) {
+            if (findExecutable('xclip')) {
+                console.log(chalk.green(`✅ Clipboard: xclip`));
+                clipboardOk = true;
+            } else if (findExecutable('xsel')) {
+                console.log(chalk.green(`✅ Clipboard: xsel`));
+                clipboardOk = true;
+            } else {
+                console.log(chalk.red(`❌ Clipboard: No clipboard tool found (install xclip or xsel)`));
+            }
+        } else {
+            // Windows has clip.exe
+            clipboardOk = true;
+            console.log(chalk.green(`✅ Clipboard: Windows native`));
+        }
+        results.clipboard = clipboardOk;
+        if (!clipboardOk) {
+            results.allValid = false;
+        }
+    }
+
+    console.log(chalk.dim('─'.repeat(50)));
+
+    // Show warnings
+    if (results.warnings.length > 0) {
+        console.log(chalk.yellow('\n⚠️  Warnings:'));
+        results.warnings.forEach(w => console.log(chalk.yellow(`   • ${w}`)));
+    }
+
+    return results;
+}
+
+// Interactive setup for first-time users or when tools are missing
+async function interactiveSetup(missingTools) {
+    console.log('');
+    console.log(chalk.yellow.bold('╔════════════════════════════════════════════════════════════╗'));
+    console.log(chalk.yellow.bold('║           🛠️  FIRST-TIME SETUP REQUIRED                    ║'));
+    console.log(chalk.yellow.bold('╚════════════════════════════════════════════════════════════╝'));
+    console.log('');
+    console.log(chalk.white('Some required tools are missing. Let\'s set them up!'));
+    console.log('');
+
+    const resolvedPaths = {};
+
+    for (const tool of missingTools) {
+        const descriptions = {
+            'node': 'Node.js runtime',
+            'claude': 'Claude Code CLI',
+            'gemini': 'Gemini CLI',
+            'xclip': 'Clipboard utility (xclip or xsel)'
+        };
+
+        const resolvedPath = await promptForToolPath(tool, descriptions[tool] || tool);
+        if (resolvedPath) {
+            resolvedPaths[tool] = resolvedPath;
+        }
+    }
+
+    return resolvedPaths;
+}
+
+// Show welcome message for first-time users
+function showWelcomeMessage() {
+    const { isMacOS, isLinux, isWindows, isAppleSilicon } = getPlatformInfo();
+
+    console.log('');
+    console.log(chalk.cyan.bold('╔════════════════════════════════════════════════════════════╗'));
+    console.log(chalk.cyan.bold('║           🎉 Welcome to MCP Auto-Add!                      ║'));
+    console.log(chalk.cyan.bold('╚════════════════════════════════════════════════════════════╝'));
+    console.log('');
+
+    let platformName = 'your system';
+    if (isMacOS) platformName = isAppleSilicon ? 'macOS (Apple Silicon)' : 'macOS (Intel)';
+    else if (isLinux) platformName = 'Linux';
+    else if (isWindows) platformName = 'Windows';
+
+    console.log(chalk.white(`Detected platform: ${chalk.cyan(platformName)}`));
+    console.log('');
+    console.log(chalk.white('This tool helps you add MCP servers to:'));
+    console.log(chalk.green('  • Claude Code') + chalk.dim(' (default)'));
+    console.log(chalk.blue('  • Gemini CLI') + chalk.dim(' (use --gemini flag)'));
+    console.log(chalk.magenta('  • OpenCode') + chalk.dim(' (use --opencode flag)'));
+    console.log('');
+    console.log(chalk.dim('─'.repeat(50)));
+    console.log('');
+}
+
+// Check if this is a first run (no config file exists)
+function isFirstRun() {
+    return !fs.existsSync(getConfigFilePath());
+}
+
+// Mark setup as complete
+function markSetupComplete() {
+    const config = loadSavedConfig();
+    config.setupComplete = true;
+    config.setupDate = new Date().toISOString();
+    config.version = '1.0.0';
+    saveSavedConfig(config);
+}
+
 // Get current working directory
 const cwd = process.cwd();
 const projectName = path.basename(cwd);
@@ -453,7 +1031,8 @@ function findNodeExecutable() {
     // Try common locations using environment variables
     const home = process.env.HOME || process.env.USERPROFILE || '';
     const commonPaths = [
-        '/usr/local/bin/node',
+        '/opt/homebrew/bin/node',  // macOS Apple Silicon (Homebrew)
+        '/usr/local/bin/node',     // macOS Intel (Homebrew) / Linux
         '/usr/bin/node'
     ];
     
@@ -509,7 +1088,8 @@ function findClaudeCodeInstallation() {
     const commonPaths = [
         path.join(home, '.local', 'bin', 'claude'),
         path.join(home, 'bin', 'claude'),
-        '/usr/local/bin/claude',
+        '/opt/homebrew/bin/claude',  // macOS Apple Silicon (Homebrew)
+        '/usr/local/bin/claude',     // macOS Intel (Homebrew) / Linux
         '/usr/bin/claude'
     ];
     
@@ -1003,7 +1583,21 @@ function generateMCPConfig() {
 
 // Function to copy text to clipboard (SECURE: uses spawnSync with stdin, no shell interpolation)
 function copyToClipboard(text) {
-    // Try xclip first (most common on Linux)
+    const isMacOS = process.platform === 'darwin';
+
+    // On macOS, try pbcopy first (native)
+    if (isMacOS) {
+        try {
+            const result = spawnSync('pbcopy', [], {
+                input: text,
+                encoding: 'utf8',
+                stdio: ['pipe', 'pipe', 'pipe']
+            });
+            if (result.status === 0) return 'pbcopy';
+        } catch (error) { /* continue to next method */ }
+    }
+
+    // Try xclip (most common on Linux)
     try {
         const result = spawnSync('xclip', ['-selection', 'clipboard'], {
             input: text,
@@ -1023,40 +1617,54 @@ function copyToClipboard(text) {
         if (result.status === 0) return 'xsel';
     } catch (error) { /* continue to next method */ }
 
-    // Try pbcopy on macOS
-    try {
-        const result = spawnSync('pbcopy', [], {
-            input: text,
-            encoding: 'utf8',
-            stdio: ['pipe', 'pipe', 'pipe']
-        });
-        if (result.status === 0) return 'pbcopy';
-    } catch (error) { /* continue to next method */ }
+    // Try pbcopy on macOS (fallback if not tried above)
+    if (!isMacOS) {
+        try {
+            const result = spawnSync('pbcopy', [], {
+                input: text,
+                encoding: 'utf8',
+                stdio: ['pipe', 'pipe', 'pipe']
+            });
+            if (result.status === 0) return 'pbcopy';
+        } catch (error) { /* continue to next method */ }
+    }
 
     return null;
 }
 
 // Function to read text from clipboard
 function readFromClipboard() {
+    const isMacOS = process.platform === 'darwin';
+
+    // On macOS, try pbpaste first (native)
+    if (isMacOS) {
+        try {
+            const content = execSync('pbpaste', { encoding: 'utf8' });
+            return content;
+        } catch (error) { /* continue to next method */ }
+    }
+
+    // Try xclip (most common on Linux)
     try {
-        // Try xclip first (most common on Linux)
         const content = execSync('xclip -selection clipboard -o', { encoding: 'utf8' });
         return content;
-    } catch (error) {
+    } catch (error) { /* continue to next method */ }
+
+    // Try xsel as fallback
+    try {
+        const content = execSync('xsel --clipboard --output', { encoding: 'utf8' });
+        return content;
+    } catch (error) { /* continue to next method */ }
+
+    // Try pbpaste (fallback if not tried above)
+    if (!isMacOS) {
         try {
-            // Try xsel as fallback
-            const content = execSync('xsel --clipboard --output', { encoding: 'utf8' });
+            const content = execSync('pbpaste', { encoding: 'utf8' });
             return content;
-        } catch (error) {
-            try {
-                // Try pbpaste on macOS
-                const content = execSync('pbpaste', { encoding: 'utf8' });
-                return content;
-            } catch (error) {
-                throw new Error('Could not read from clipboard. Please install xclip, xsel, or use macOS pbpaste.');
-            }
-        }
+        } catch (error) { /* continue to next method */ }
     }
+
+    throw new Error('Could not read from clipboard. On macOS use pbpaste, on Linux install xclip or xsel.');
 }
 
 // Function to generate claude command string
@@ -1299,7 +1907,8 @@ function findGeminiCLIInstallation() {
         path.join(home, '.npm-global', 'bin', 'gemini'),
         path.join(home, '.local', 'bin', 'gemini'),
         path.join(home, 'bin', 'gemini'),
-        '/usr/local/bin/gemini',
+        '/opt/homebrew/bin/gemini',  // macOS Apple Silicon (Homebrew)
+        '/usr/local/bin/gemini',     // macOS Intel (Homebrew) / Linux
         '/usr/bin/gemini'
     ];
     
@@ -1373,9 +1982,17 @@ function generateGeminiMCPCommand(config, serverName, scope = 'user') {
     // For local servers with args, we need to construct the command properly
     let command = `gemini mcp add`;
 
-    // Add scope flag if not user (default)
-    if (validatedScope !== 'user') {
-        command += ` --scope ${validatedScope}`;
+    // IMPORTANT: Gemini CLI defaults to 'project' scope, so we MUST always pass --scope
+    command += ` --scope ${validatedScope}`;
+
+    // Add --trust flag (matches Gemini config format)
+    command += ` --trust`;
+
+    // Add environment variables if present
+    if (config.env && Object.keys(config.env).length > 0) {
+        for (const [key, value] of Object.entries(config.env)) {
+            command += ` -e ${shellEscape(`${key}=${value}`)}`;
+        }
     }
 
     // Add server name (shell-escaped for display)
@@ -1397,8 +2014,18 @@ function buildGeminiMCPAddArgs(config, serverName, scope = 'user') {
 
     const args = ['mcp', 'add'];
 
-    if (validatedScope !== 'user') {
-        args.push('--scope', validatedScope);
+    // IMPORTANT: Gemini CLI defaults to 'project' scope, so we MUST always pass --scope
+    // to ensure the config goes to the intended location
+    args.push('--scope', validatedScope);
+
+    // Add --trust flag to auto-approve tool calls (matches Gemini config format)
+    args.push('--trust');
+
+    // Add environment variables if present (Gemini uses -e KEY=value format)
+    if (config.env && Object.keys(config.env).length > 0) {
+        for (const [key, value] of Object.entries(config.env)) {
+            args.push('-e', `${key}=${value}`);
+        }
     }
 
     args.push(validatedName);
@@ -1429,7 +2056,8 @@ async function executeGeminiMCPAddURL(config, serverName, scope = 'user') {
     }
 
     // Build command display string for logging (shell-escaped)
-    const displayCommand = `gemini mcp add --transport ${validatedTransport}${validatedScope !== 'user' ? ` --scope ${validatedScope}` : ''} ${shellEscape(validatedName)} ${shellEscape(validatedURL)}`;
+    // IMPORTANT: Gemini CLI defaults to 'project' scope, so we MUST always pass --scope
+    const displayCommand = `gemini mcp add --transport ${validatedTransport} --scope ${validatedScope} --trust ${shellEscape(validatedName)} ${shellEscape(validatedURL)}`;
     logVerbose(`Full command: ${displayCommand}`);
 
     if (isDryRun) {
@@ -1464,10 +2092,8 @@ async function executeGeminiMCPAddURL(config, serverName, scope = 'user') {
     logVerbose(`📝 Gemini MCP config will be written to: ${configPath}`);
 
     // Build argument array (SECURE: no shell interpretation)
-    const args = ['mcp', 'add', '--transport', validatedTransport];
-    if (validatedScope !== 'user') {
-        args.push('--scope', validatedScope);
-    }
+    // IMPORTANT: Gemini CLI defaults to 'project' scope, so we MUST always pass --scope
+    const args = ['mcp', 'add', '--transport', validatedTransport, '--scope', validatedScope, '--trust'];
     args.push(validatedName, validatedURL);
 
     log(`📤 Adding URL-based MCP server "${validatedName}" to Gemini CLI with ${validatedTransport.toUpperCase()} transport...`, 'info');
@@ -2199,6 +2825,213 @@ async function main() {
             await handleEditMode();
             process.exit(0);
         }
+
+        // Handle --check mode (validate environment only)
+        if (checkMode) {
+            console.log('');
+            console.log(chalk.cyan.bold('╔════════════════════════════════════════════════════════════╗'));
+            console.log(chalk.cyan.bold('║           🔍 Environment Check                             ║'));
+            console.log(chalk.cyan.bold('╚════════════════════════════════════════════════════════════╝'));
+
+            // Check all possible tools
+            const fullCheck = await validateEnvironment({
+                requireNode: true,
+                requireClaude: true,
+                requireGemini: true,
+                requireClipboard: true
+            });
+
+            // Check OpenCode config location (no CLI needed)
+            const home = process.env.HOME || process.env.USERPROFILE || '';
+            const openCodeConfigDir = path.join(home, '.config', 'opencode');
+            const openCodeConfigPath = path.join(openCodeConfigDir, 'opencode.json');
+            const openCodeExists = fs.existsSync(openCodeConfigPath);
+            if (openCodeExists) {
+                console.log(chalk.green(`✅ OpenCode: Config found at ${openCodeConfigPath}`));
+            } else {
+                console.log(chalk.cyan(`ℹ️  OpenCode: No CLI needed (writes directly to ${openCodeConfigPath})`));
+            }
+            console.log(chalk.dim('──────────────────────────────────────────────────'));
+
+            console.log('');
+
+            // Show saved custom paths
+            const savedConfig = loadSavedConfig();
+            if (savedConfig.customPaths && Object.keys(savedConfig.customPaths).length > 0) {
+                console.log(chalk.cyan('📂 Saved custom paths:'));
+                Object.entries(savedConfig.customPaths).forEach(([tool, toolPath]) => {
+                    const exists = fs.existsSync(toolPath);
+                    const status = exists ? chalk.green('✓') : chalk.red('✗ (missing)');
+                    console.log(`   ${tool}: ${toolPath} ${status}`);
+                });
+                console.log('');
+            }
+
+            // Show config file location
+            console.log(chalk.dim(`mcp-auto-add config: ${getConfigFilePath()}`));
+
+            // Summary
+            console.log('');
+            if (fullCheck.allValid) {
+                console.log(chalk.green.bold('✅ All tools are properly configured!'));
+            } else {
+                console.log(chalk.yellow.bold('⚠️  Some tools are missing. Run "mcp-auto-add --setup" to configure.'));
+            }
+
+            process.exit(0);
+        }
+
+        // Handle --setup mode (interactive setup wizard)
+        if (setupMode) {
+            showWelcomeMessage();
+
+            console.log(chalk.cyan.bold('╔════════════════════════════════════════════════════════════╗'));
+            console.log(chalk.cyan.bold('║           🛠️  Setup Wizard                                 ║'));
+            console.log(chalk.cyan.bold('╚════════════════════════════════════════════════════════════╝'));
+            console.log('');
+
+            // Check what's already installed
+            const currentStatus = await validateEnvironment({
+                requireNode: true,
+                requireClaude: true,
+                requireGemini: true,
+                requireClipboard: true
+            });
+
+            console.log('');
+
+            // Find missing tools
+            const missingTools = [];
+            if (!currentStatus.node) missingTools.push('node');
+            if (!currentStatus.claude) missingTools.push('claude');
+            if (!currentStatus.gemini) missingTools.push('gemini');
+            if (!currentStatus.clipboard) missingTools.push('xclip');
+
+            if (missingTools.length === 0) {
+                console.log(chalk.green.bold('🎉 All tools are already installed!'));
+                console.log('');
+                console.log(chalk.white('You\'re ready to use mcp-auto-add with:'));
+                console.log(chalk.green('  • Claude Code') + chalk.dim(' (mcp-auto-add)'));
+                console.log(chalk.blue('  • Gemini CLI') + chalk.dim(' (mcp-auto-add --gemini)'));
+                console.log(chalk.magenta('  • OpenCode') + chalk.dim(' (mcp-auto-add --opencode)'));
+            } else {
+                console.log(chalk.yellow(`Found ${missingTools.length} tool(s) that need setup:`));
+                missingTools.forEach(tool => console.log(chalk.yellow(`  • ${tool}`)));
+                console.log('');
+
+                const { runSetup } = await inquirer.prompt([
+                    {
+                        type: 'confirm',
+                        name: 'runSetup',
+                        message: 'Would you like to set up missing tools now?',
+                        default: true
+                    }
+                ]);
+
+                if (runSetup) {
+                    await interactiveSetup(missingTools);
+                    markSetupComplete();
+                    console.log('');
+                    console.log(chalk.green.bold('✅ Setup complete!'));
+                }
+            }
+
+            process.exit(0);
+        }
+
+        // ==========================================
+        // ENVIRONMENT VALIDATION & FIRST-RUN SETUP
+        // ==========================================
+
+        // Show welcome message for first-time users
+        if (isFirstRun() && !isDryRun) {
+            showWelcomeMessage();
+        }
+
+        // Determine which tools we need based on flags
+        const validationOptions = {
+            requireNode: true, // Always needed
+            requireClaude: !useGemini && !useOpenCode, // Claude Code mode
+            requireGemini: useGemini, // Gemini CLI mode
+            requireClipboard: useClipboard // Clipboard mode
+        };
+
+        // Skip validation in dry-run mode (just show what would be checked)
+        if (isDryRun) {
+            log('🔍 DRY RUN - Would validate environment for:', 'info');
+            if (validationOptions.requireNode) log('  • Node.js', 'info');
+            if (validationOptions.requireClaude) log('  • Claude Code CLI', 'info');
+            if (validationOptions.requireGemini) log('  • Gemini CLI', 'info');
+            if (validationOptions.requireClipboard) log('  • Clipboard tools', 'info');
+            console.log('');
+        } else {
+            // Run validation
+            const envResult = await validateEnvironment(validationOptions);
+
+            // Handle missing tools
+            if (!envResult.allValid) {
+                const missingTools = [];
+
+                if (validationOptions.requireNode && !envResult.node) {
+                    missingTools.push('node');
+                }
+                if (validationOptions.requireClaude && !envResult.claude) {
+                    missingTools.push('claude');
+                }
+                if (validationOptions.requireGemini && !envResult.gemini) {
+                    missingTools.push('gemini');
+                }
+                if (validationOptions.requireClipboard && !envResult.clipboard) {
+                    missingTools.push('xclip');
+                }
+
+                if (missingTools.length > 0) {
+                    // Interactive setup for missing tools
+                    if (!isForce) {
+                        const resolvedPaths = await interactiveSetup(missingTools);
+
+                        // Check if we now have what we need
+                        let canContinue = true;
+                        if (missingTools.includes('node') && !resolvedPaths.node) {
+                            log('❌ Node.js is required to continue', 'error');
+                            canContinue = false;
+                        }
+                        if (missingTools.includes('claude') && !resolvedPaths.claude) {
+                            log('❌ Claude CLI is required for Claude Code mode', 'error');
+                            log('💡 Try using --opencode flag to write config directly to files', 'info');
+                            canContinue = false;
+                        }
+                        if (missingTools.includes('gemini') && !resolvedPaths.gemini) {
+                            log('❌ Gemini CLI is required for Gemini mode', 'error');
+                            log('💡 Try using --opencode flag to write config directly to files', 'info');
+                            canContinue = false;
+                        }
+
+                        if (!canContinue) {
+                            process.exit(1);
+                        }
+                    } else {
+                        // Force mode - show error and exit
+                        log('❌ Required tools are missing. Run without --force for interactive setup.', 'error');
+                        missingTools.forEach(tool => {
+                            showInstallInstructions(tool);
+                        });
+                        process.exit(1);
+                    }
+                }
+            }
+
+            // Mark first run as complete
+            if (isFirstRun()) {
+                markSetupComplete();
+            }
+        }
+
+        console.log('');
+
+        // ==========================================
+        // END VALIDATION
+        // ==========================================
 
         // Display clear platform confirmation banner
         const cliName = useOpenCode ? 'OpenCode' : (useGemini ? 'Gemini CLI' : 'Claude Code');
